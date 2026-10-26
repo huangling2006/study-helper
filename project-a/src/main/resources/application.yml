@@ -1,0 +1,49 @@
+﻿server:
+  port: 8080
+
+spring:
+  application:
+    name: project-a
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3307/study_helper?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: root
+    password: ${DB_PASSWORD:root123} # 走环境变量，本地默认 root123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      password: ${REDIS_PASSWORD:} # 本地无密码留空
+  threads:
+    virtual:
+      enabled: true # JDK21 虚拟线程
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+# 自定义 JWT 配置
+jwt:
+  secret: please-change-this-to-a-32-byte-random-string-2026
+  expire-minutes: 120
+
+# Swagger/Knife4j 配置
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+# 关掉 Knife4j 增强，防止在 Spring Boot 3.5 下报错
+knife4j:
+  enable: false
+  setting:
+    language: zh_cn
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - [%X{traceId}] %msg%n"

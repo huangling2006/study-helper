@@ -1,0 +1,26 @@
+﻿services:
+  mysql:
+    image: mysql:8.0
+    container_name: study-mysql
+    ports:
+      - '3307:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: study_helper
+      TZ: Asia/Shanghai
+    volumes:
+      - ./mysql-data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d
+    command:
+      - --default-time-zone=+8:00
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2
+    container_name: study-redis
+    ports:
+      - '6379:6379'
+    command: redis-server --appendonly yes
+    volumes:
+      - ./redis-data:/data
+    restart: unless-stopped

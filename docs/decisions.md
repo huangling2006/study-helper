@@ -1,0 +1,108 @@
+﻿开发决策记录 (Decisions)
+
+本文件记录项目开发过程中的关键技术取舍、踩坑记录及底层原理，作为面试深挖的素材库。
+
+
+1、 端口冲突与 Docker 端口映射取舍 (2026-10-25)
+
+问题描述：启动 Docker Compose 时，MySQL 容器报错 bind: Only one usage of each socket address。
+
+原因分析：宿主机本地已安装了 MySQL 服务，且正在占用默认的 3306 端口。
+
+候选方案：1. 强杀本地 MySQL 进程，腾出 3306 端口；2. 修改 Docker Compose，将宿主机的 3307 映射到容器的 3306。
+
+最终决策：选择方案 2。修改 docker-compose.yml 中的 ports: - '3307:3306'，并在 Spring Boot 的 application.yml 中同步修改数据库连接端口。
+
+放弃方案原因：保留本地 MySQL 可以避免影响本机其他可能依赖数据库的软件或日常练习。
+
+面试话术：“在本地开发时我遇到了端口冲突，我选择修改 Docker 映射而不是强行杀掉本地进程，这样能保证依赖环境的隔离性，只改动项目配置即可。”
+
+
+2、 Windows 下文件编码导致的 BOM 头坑 (2026-10-25)
+
+问题描述：Maven 编译时，Java 启动类报错 非法字符: '\ufeff'。
+
+原因分析：在 Windows 下使用 PowerShell 或旧版记事本生成文件时，默认保存的 UTF-8 带有 BOM（Byte Order Mark）头，Java 编译器严格校验，无法识别该隐藏字符。
+
+候选方案：1. 写一段代码/脚本去消除 BOM 头；2. 使用现代文本编辑器（或指定无 BOM 的另存为）重写该文件；3. 在 Maven 中强制全局指定编码。
+
+最终决策：删掉原文件，用编辑器保存为纯净的 UTF-8 (无 BOM)，并在父 pom.xml 显式指定 <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding> 强制规范。
+
+放弃方案原因：从源头解决，避免后续所有生成文件都去扫描 BOM 头。
+
+面试话术：“这让我意识到跨平台开发时文件编码的重要性。后来我在 Maven 里显式指定了 UTF-8，确保在任何环境下编译都不会出现乱码或不兼容字符。”
+
+
+3、 JDK 21 的 Maven 编译环境被旧路径污染 (2026-10-25)
+
+问题描述：系统终端里 javac -version 和 mvn -version 都显示 JDK 21，但在 Maven 编译时持续报错 Fatal error compiling: 错误: 不支持发行版本 21。
+
+原因分析：系统环境变量 Path 中存在一个残缺的 D:\bin 路径，导致 Maven 底层调用编译器时，找到了错误的、不完整的 Java 环境。
+
+候选方案：1. 修改系统级环境变量并修复 JDK 目录结构；2. 使用 Maven 的 toolchains.xml 强制指定编译使用的 JDK 绝对路径；3. 在 pom.xml 中显式指定新版 maven-compiler-plugin 并配置 <release>21</release>。
+
+最终决策：全套使用（方案 1+3）。下载了纯净的 JDK 21 解压到 D:\Dev，清理了环境变量中的脏路径，并在父 pom.xml 中锁死了编译插件版本 3.13.0 与 <release>21</release> 参数。
+
+放弃方案原因：优先从系统层面修复，一劳永逸；配合 pom.xml 锁版本，确保团队协作（或换电脑）时依赖一致。
+
+面试话术：“排查环境问题让我对 Java 的类加载和运行机制有了更深的理解。我不仅在系统层修了环境变量，还在 Maven 构建中显式指定了编译器版本和 release 参数，确保构建过程不依赖开发者的偶发环境，做到了构建环境的隔离与稳定。”
+
+
+4、 MyBatis-Plus 3.5.17 的底层依赖拆分坑（2026-10-26）
+
+问题描述：引入 mybatis-plus-spring-boot3-starter 后，代码飘红，找不到分页插件 PaginationInnerInterceptor 和基类 IService。
+
+原因分析：官方在 3.5.9+ 版本为了轻量化，把分页解析包和部分服务层基类拆分了。内置的 starter 不再包含这些依赖，必须显式引入。
+
+候选方案：1. 引入缺失的 extension 和 jsqlparser 并继承 ServiceImpl；2. 引入分页插件包，同时放弃继承 ServiceImpl，直接在 Service 层注入 UserMapper 编写逻辑。
+
+最终决策：选择方案 2。引入 mybatis-plus-jsqlparser:3.5.17 解决分页报错，在 UserServiceImpl 中直接注入 UserMapper。
+
+放弃方案原因：新版框架包路径变动频繁，强行继承容易引发复杂的依赖冲突。直接注入 Mapper 代码更轻量，脱离了 MP 的强绑定。
+
+面试话术：“在使用最新版 MyBatis-Plus 时，我遇到了依赖拆分导致的类找不到问题。我没有死磕框架的内部基类，而是选择直接注入 Mapper 来解耦，这不仅解决了报错，也让我对 ORM 框架的本质有了更深的理解。”
+
+
+5、 Spring Boot 3.5.5 与 Knife4j 4.5.0 的版本冲突（2026-10-26）
+
+问题描述：项目启动后，访问 /v3/api-docs 或文档页面直接返回 500，控制台报错 NoSuchMethodError。
+
+原因分析：Knife4j 自带的底层依赖 springdoc-openapi:2.3.0 版本太老，与 Spring Boot 3.5 底层的 Spring Framework 6.2 存在 API 不兼容。
+
+候选方案：1. 降低 Spring Boot 版本；2. 排除 Knife4j 自带的旧版 springdoc，手动引入最新版；3. 放弃 Knife4j 改用原生 Swagger UI。
+
+最终决策：选择方案 2。在 pom.xml 中排除 Knife4j 默认的 springdoc 依赖，手动引入 2.8.13 版本。并在 application.yml 中设置 knife4j.enable 为 false 规避增强功能的冲突。
+
+放弃方案原因：降级框架不符合技术演进趋势；原生 Swagger UI 缺少中文环境和更好的 UI。
+
+面试话术：“在整合 API 文档时，我通过查看源码堆栈，定位到是 Spring Boot 3.5 底层升级导致第三方组件调用了废弃方法。我通过 Maven 的 exclude 标签进行依赖仲裁，替换了兼容版本，这锻炼了我阅读源码和处理 Jar 包冲突的能力。”
+
+
+6、 JDK 21 的编译环境与 IDEA 配置对齐（2026-10-26）
+
+问题描述：Maven 编译时持续报错：源发行版 21 需要目标发行版 21。
+
+原因分析：Maven 的编译插件默认版本太低，不认识 21；且 IDEA 的 Project Structure 中 SDK 未正确切换，IDE 编译器与 Maven 编译器未能统一。
+
+候选方案：1. 仅修改环境变量；2. 仅修改 pom.xml；3. 全局彻底对齐。
+
+最终决策：执行方案 3。在父 pom.xml 中锁定 maven-compiler-plugin 为 3.13.0 并配置 release 21；同时在 IDEA 的 Project Structure 和 Java Compiler 设置中，把 SDK 和 Bytecode version 强制统一为 21。
+
+放弃方案原因：只改一处会导致“命令行能跑，但 IDEA 飘红”或“IDEA 能跑，打包报错”的尴尬局面。
+
+面试话术：“升级 JDK 21 后遇到了编译期报错，我意识到这不仅是 POM 文件的问题，更是构建工具与 IDE 之间配置不同步的问题。通过统一两者的字节码版本，彻底解决了编译兼容性。”
+
+
+7、 密码加密包的依赖下载失败与兜底策略（2026-10-26）
+
+问题描述：按照大纲使用 BCrypt 算法，但引入 spring-security-crypto 依赖时，Maven 网络波动导致无法下载，导致代码全线飘红。
+
+原因分析：国内镜像源对该包的拉取存在延迟，且引入整个 Spring Security 体系对于单体项目前期来说过重。
+
+候选方案：1. 停下手头工作死磕 Maven 依赖；2. 完全放弃加密，明文存储；3. 手写基于 JDK 原生的 MessageDigest 实现 SHA-256 加密。
+
+最终决策：选择方案 3。临时在 UserServiceImpl 中手写了纯原生的 SHA-256 哈希方法。优先保证业务主流程跑通。
+
+放弃方案原因：死磕依赖浪费时间，影响项目进度；明文存储严重违反安全规范。后期网络恢复或直接下载 jar 包后，可无缝切回 BCrypt。
+
+面试话术：“开发中遇到依赖无法拉取的问题，我没有被环境卡死。为了不阻塞主流程，我先用原生代码实现了哈希加密作为兜底。当然我清楚生产环境必须用 BCrypt，这体现了我分清主次和兜底解决的开发思路。”
