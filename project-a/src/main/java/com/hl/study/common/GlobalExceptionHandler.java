@@ -20,25 +20,30 @@ public class GlobalExceptionHandler {
         HttpStatus status = switch (e.getCode()) {
             case 401 -> HttpStatus.UNAUTHORIZED;
             case 403 -> HttpStatus.FORBIDDEN;
-            case 429 -> HttpStatus.TOO_MANY_REQUESTS; // 注意大纲这里拼写有误，正确的是 TOO_MANY_REQUESTS
+            case 404 -> HttpStatus.NOT_FOUND; // 新增：修复 404 被兜底成 400 的问题
+            case 429 -> HttpStatus.TOO_MANY_REQUESTS;
             default -> HttpStatus.BAD_REQUEST;
         };
         return ResponseEntity.status(status).body(R.fail(e.getCode(), e.getMessage()));
     }
 
-    /** 参数校验异常：把字段级错误拼成一句话 */
+    /** 参数校验异常：把字段级错误拼成一句话，并返回 HTTP 400 */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public R<Void> handleValid(MethodArgumentNotValidException e) {
+    public ResponseEntity<R<Void>> handleValid(MethodArgumentNotValidException e) {
         String msg = e.getBindingResult().getFieldErrors().stream()
                 .map(f -> f.getField() + ":" + f.getDefaultMessage())
                 .collect(Collectors.joining(", "));
-        return R.fail(ErrorCode.PARAM_ERROR.getCode(), msg);
+        // 修改：改为返回 ResponseEntity，状态码设为 400
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(R.fail(ErrorCode.PARAM_ERROR.getCode(), msg));
     }
 
-    /** 兜底：绝不把堆栈抛给用户 */
+    /** 兜底：绝不把堆栈抛给用户，返回 HTTP 500 */
     @ExceptionHandler(Exception.class)
-    public R<Void> handleEx(Exception e) {
+    public ResponseEntity<R<Void>> handleEx(Exception e) {
         log.error("system error", e);
-        return R.fail(ErrorCode.SYSTEM_ERROR.getCode(), ErrorCode.SYSTEM_ERROR.getMessage());
+        // 修改：统一改为返回 ResponseEntity，状态码设为 500
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(R.fail(ErrorCode.SYSTEM_ERROR.getCode(), ErrorCode.SYSTEM_ERROR.getMessage()));
     }
 }
