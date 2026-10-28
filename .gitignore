@@ -1,40 +1,33 @@
-﻿target/
-!.mvn/wrapper/maven-wrapper.jar
-!**/src/main/**/target/
-!**/src/test/**/target/
-
-### IntelliJ IDEA ###
-.idea
-*.iws
-*.iml
-*.ipr
-
-### Eclipse ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
-
-### NetBeans ###
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-build/
-
-### VS Code ###
-.vscode/
-
-### Mac ###
-.DS_Store
-
-### Log ###
+﻿# ==========================================
+# 编译生成的文件 (防止大文件上传)
+# ==========================================
+target/
+*.class
 *.log
+build/
+dist/
 
-### Docker Volumes ###
+# ==========================================
+# 本地数据库物理数据 (极其重要，绝对不要传)
+# ==========================================
 deploy/mysql-data/
 deploy/redis-data/
+
+# ==========================================
+# IDE 配置文件 (不影响别人拉取你的代码)
+# ==========================================
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+
+# ==========================================
+# 系统文件与环境密钥
+# ==========================================
+.DS_Store
+Thumbs.db
+*.env
