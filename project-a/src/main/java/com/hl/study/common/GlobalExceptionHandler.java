@@ -1,5 +1,6 @@
 package com.hl.study.common;
 
+import io.swagger.v3.oas.annotations.Hidden;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -9,6 +10,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.stream.Collectors;
 
+@Hidden // 关键：防止 Swagger 扫描这个类导致文档报错
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -20,7 +22,7 @@ public class GlobalExceptionHandler {
         HttpStatus status = switch (e.getCode()) {
             case 401 -> HttpStatus.UNAUTHORIZED;
             case 403 -> HttpStatus.FORBIDDEN;
-            case 404 -> HttpStatus.NOT_FOUND; // 新增：修复 404 被兜底成 400 的问题
+            case 404 -> HttpStatus.NOT_FOUND; // 修复 404 被兜底成 400 的问题
             case 429 -> HttpStatus.TOO_MANY_REQUESTS;
             default -> HttpStatus.BAD_REQUEST;
         };
@@ -33,7 +35,7 @@ public class GlobalExceptionHandler {
         String msg = e.getBindingResult().getFieldErrors().stream()
                 .map(f -> f.getField() + ":" + f.getDefaultMessage())
                 .collect(Collectors.joining(", "));
-        // 修改：改为返回 ResponseEntity，状态码设为 400
+        // 改为返回 ResponseEntity，状态码设为 400
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(R.fail(ErrorCode.PARAM_ERROR.getCode(), msg));
     }
@@ -42,7 +44,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<R<Void>> handleEx(Exception e) {
         log.error("system error", e);
-        // 修改：统一改为返回 ResponseEntity，状态码设为 500
+        // 统一改为返回 ResponseEntity，状态码设为 500
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(R.fail(ErrorCode.SYSTEM_ERROR.getCode(), ErrorCode.SYSTEM_ERROR.getMessage()));
     }

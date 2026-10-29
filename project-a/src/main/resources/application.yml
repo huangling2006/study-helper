@@ -40,7 +40,7 @@ springdoc:
 
 # 关掉 Knife4j 增强，防止在 Spring Boot 3.5 下报错
 knife4j:
-  enable: false
+  enable: true
   setting:
     language: zh_cn
 

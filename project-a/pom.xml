@@ -73,24 +73,11 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Knife4j 接口文档（排除自带的旧版 springdoc） -->
+        <!-- Knife4j 接口文档（换用完美兼容 Boot 3.5 的社区维护版 5.7.9，自带新版 springdoc） -->
         <dependency>
-            <groupId>com.github.xiaoymin</groupId>
+            <groupId>com.baizhukui</groupId>
             <artifactId>knife4j-openapi3-jakarta-spring-boot-starter</artifactId>
-            <version>4.5.0</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.springdoc</groupId>
-                    <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <!-- 手动引入兼容 Spring Boot 3.5 的新版 springdoc -->
-        <dependency>
-            <groupId>org.springdoc</groupId>
-            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-            <version>2.8.13</version>
+            <version>5.7.9</version>
         </dependency>
 
         <!-- Lombok -->
@@ -98,6 +85,12 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
+        </dependency>
+
+        <!-- Spring Security Crypto (用于 BCrypt) -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
         <!-- 测试 -->
