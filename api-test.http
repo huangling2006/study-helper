@@ -1,0 +1,59 @@
+### 1. 登录获取 Token
+POST http://localhost:8080/api/user/login
+Content-Type: application/json
+
+{
+  "username": "wrongtest1",
+  "password": "test12345"
+}
+
+> {%
+    client.global.set("auth_token", response.body.data.token);
+%}
+
+### 2. 先查当前自己的错题列表（验证脱敏，期望 200 且包含 6,7,8）
+GET http://localhost:8080/api/wrong/list?page=1&size=10
+Authorization: Bearer {{auth_token}}
+
+### 3. 测试非法排序参数（验证白名单拦截，期望 400）
+GET http://localhost:8080/api/wrong/list?orderBy=id
+Authorization: Bearer {{auth_token}}
+
+### 4. 测试越权删除（期望 404）
+# 执行前，请先在 PowerShell 插入一条属于 user_id=1 的假数据：
+# docker exec -it study-mysql mysql -uroot -proot123 study_helper -e "INSERT INTO wrong_book (id, user_id, question_id, wrong_count) VALUES (99, 1, 1, 1);"
+DELETE http://localhost:8080/api/wrong/99
+Authorization: Bearer {{auth_token}}
+
+### 1. 测试抽题
+GET http://localhost:8080/api/wrong/practice?size=2
+Authorization: Bearer {{auth_token}}
+
+
+### 2. 测试提交练习（答对一题，答错一题）
+POST http://localhost:8080/api/wrong/practice/submit
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "answers": [
+    { "questionId": 1, "userAnswer": "A" },
+    { "questionId": 2, "userAnswer": "C" }
+  ]
+}
+
+
+### 查不存在的题目（测试防穿透）
+GET http://localhost:8080/api/question/99999999
+Authorization: Bearer {{auth_token}}
+
+###
+GET http://localhost:8080/api/question/9999999
+
+###
+GET http://localhost:8080/api/wrong/hot
+Authorization: Bearer {{auth_token}}
+
+###
+DELETE http://localhost:8080/api/wrong/8
+Authorization: Bearer {{auth_token}}
