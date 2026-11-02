@@ -40,3 +40,10 @@
 
 ---
 *(后续 W3 的缓存命中率、W6 的 QPS 拐点与 P95 响应时间将在此继续追加)*
+## W3 阶段：Top100 与详情缓存（不进简历，仅自测留档）
+### 测试环境
+- 机器：Windows 11 / MySQL & Redis 均在 Docker
+- 数据量：question 200 行；wrong_book 5 行
+### 结论
+- 穿透验证：两次 GET /api/question/9999999，第二次 SQL 0 次，Redis 中为 `__NULL__`，TTL 约 300 秒。
+- 雪崩验证：TTL 大约在 1720~1800 秒之间波动，证明抖动生效。

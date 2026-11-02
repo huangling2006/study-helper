@@ -82,6 +82,15 @@
 | GET | `/api/question/list` | 题目分页筛选 (不泄露答案/解析) |
 | GET | `/api/question/{id}` | 题目详情 (不泄露答案/解析) |
 | POST | `/api/answer/submit` | 提交答题，事务判分并归集错题 |
+GET /api/wrong/list (错题分页)
+
+DELETE /api/wrong/{id} (移除错题)
+
+GET /api/wrong/practice (抽题)
+
+POST /api/wrong/practice/submit (提交练习)
+
+GET /api/wrong/hot (Top100 榜单)
 
 ### 统一错误码 (部分)
 | HTTP 状态码 | body 业务码 (code) | 说明 |
