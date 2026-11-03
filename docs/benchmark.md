@@ -47,3 +47,10 @@
 ### 结论
 - 穿透验证：两次 GET /api/question/9999999，第二次 SQL 0 次，Redis 中为 `__NULL__`，TTL 约 300 秒。
 - 雪崩验证：TTL 大约在 1720~1800 秒之间波动，证明抖动生效。
+
+### 缓存命中率与 P95（W3 补充，2026-11-03）
+- 命令：redis-cli DEL wrong:hot:top100 → python scripts/bench_wrong.py <token> 20 200
+- 冷组：[cold] n=200 c=20 avg=85.9ms P50=17.9ms P95=634.1ms max=817.9ms fail=0
+- 热组：[hot]  n=200 c=20 avg=11.9ms P50=10.6ms P95=21.6ms max=26.0ms fail=0
+- 结论：热组 P95 响应时间相比冷组下降约 96.6%（从 634ms 降至 21ms），说明 Cache-Aside 缓存命中生效，且 SET NX EX 互斥锁有效防止了并发击穿 MySQL。
+- 机器：Windows 11 / i5-13500H / 15.5GB，MySQL 3307、Redis 6379 均在 Docker
