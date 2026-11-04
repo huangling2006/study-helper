@@ -1,0 +1,2 @@
+VHOST: /
+QUEUE: study.report.retry.queue

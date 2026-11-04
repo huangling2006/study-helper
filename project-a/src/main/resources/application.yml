@@ -18,6 +18,47 @@ spring:
     virtual:
       enabled: true # JDK21 虚拟线程
 
+  # ========== W4 RabbitMQ 配置 ==========
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: study
+    password: study123
+    publisher-confirm-type: correlated # 开启确认机制
+    publisher-returns: true            # 开启退回机制
+    template:
+      mandatory: true                  # 路由不到队列时触发 return
+    listener:
+      simple:
+        acknowledge-mode: manual       # 手动 ACK
+        prefetch: 1                    # 每次只取一条
+        default-requeue-rejected: false # 拒绝后不进主队列（防死循环）
+        retry:
+          enabled: false               # 关掉 Spring 自带内存重试（用 TTL+DLX）
+
+  # ========== W4 新增 AI 配置 ==========
+  http:
+    client:
+      connect-timeout: 3s  # 连不上要快失败
+      read-timeout: 30s    # 超时阈值 30s
+  ai:
+    retry:
+      max-attempts: 2
+      backoff:
+        initial-interval: 1s
+        multiplier: 2
+        max-interval: 4s
+      on-client-errors: false
+    deepseek:
+      api-key: sk-placeholder # 千万别加引号
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-chat
+          temperature: 0.3
+          max-tokens: 1500
+  # ======================================
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
@@ -38,7 +79,6 @@ springdoc:
   api-docs:
     path: /v3/api-docs
 
-# 关掉 Knife4j 增强，防止在 Spring Boot 3.5 下报错
 knife4j:
   enable: true
   setting:

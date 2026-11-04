@@ -24,3 +24,19 @@
     volumes:
       - ./redis-data:/data
     restart: unless-stopped
+
+  rabbitmq:
+    image: docker.m.daocloud.io/library/rabbitmq:3.13-management
+    container_name: study-rabbitmq
+    ports:
+      - '5672:5672'   # AMQP 协议端口，代码连这个
+      - '15672:15672' # 控制台网页端口，浏览器看这个
+    environment:
+      RABBITMQ_DEFAULT_USER: study
+      RABBITMQ_DEFAULT_PASS: study123
+
+      TZ: Asia/Shanghai
+    mem_limit: 512m
+    volumes:
+      - ./rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped

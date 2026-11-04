@@ -57,3 +57,14 @@ Authorization: Bearer {{auth_token}}
 ###
 DELETE http://localhost:8080/api/wrong/8
 Authorization: Bearer {{auth_token}}
+### 触发AI报告
+POST http://localhost:8080/api/report/generate
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTM3MTcyMDYsImV4cCI6MTc5MzcyNDQwNn0.TEFWtQ4cMxXNVwVL31ybP8jMkdtID7L67yHaRo12xM4BoeY4HJTkjm2kV-P3OM89
+
+###
+POST http://localhost:8080/api/report/generate
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTM3OTIyNzEsImV4cCI6MTc5Mzc5OTQ3MX0.a_LyJ-Dyo5wAsM5gZ5sxvle6GVrp23YFQ6mgb-Qv6sAWoH6dYKlqG4FkBmiDwuBI
+
+###
+GET http://localhost:8080/api/report/8e0a95ee051541318707f124e408be40
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTM3OTIyNzEsImV4cCI6MTc5Mzc5OTQ3MX0.a_LyJ-Dyo5wAsM5gZ5sxvle6GVrp23YFQ6mgb-Qv6sAWoH6dYKlqG4FkBmiDwuBI
