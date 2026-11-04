@@ -79,7 +79,7 @@ public class ReportService {
         ReportStatusVO vo = new ReportStatusVO();
         vo.setRequestId(r.getRequestId());
         vo.setStatus(r.getStatus());
-        vo.setAiSuccess(r.getStatus() == 2);
+        vo.setAiSuccess(r.getStatus() == 1);
         vo.setContent(r.getContent());
         vo.setTokenCost(r.getTokenCost());
         return vo;
