@@ -1,20 +1,28 @@
 package com.hl.study.report.consumer;
 
+import com.hl.study.common.TraceIdFilter;
 import com.hl.study.mq.MqConst;
 import com.hl.study.mq.ReportMessage;
 import com.hl.study.report.ai.ReportAiService;
 import com.hl.study.report.ai.ReportResult;
+import com.hl.study.report.ai.ReportStats;
+import com.hl.study.report.ai.TemplateReportGenerator;
 import com.hl.study.report.entity.AiReport;
 import com.hl.study.report.mapper.ReportMapper;
+import com.hl.study.report.service.ReportAggregator;
 import com.rabbitmq.client.Channel;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -22,13 +30,27 @@ public class ReportConsumer {
 
     @Resource
     private ReportMapper reportMapper;
+
     @Resource
     private ReportAiService aiService;
 
+    @Resource
+    private ReportAggregator aggregator;
+
+    @Resource
+    private TemplateReportGenerator template;
+
+    @Resource
+    private RabbitTemplate rabbitTemplate;
+
     @RabbitListener(queues = MqConst.QUEUE_MAIN, ackMode = "MANUAL")
-    public void onMessage(ReportMessage msg, Message raw, Channel channel) throws IOException {
+    public void onMessage(ReportMessage msg, Message raw, Channel channel,
+                          @Header(name = "x-retry-count", required = false) Integer retryCount,
+                          @Header(name = TraceIdFilter.TRACE_ID, required = false) String traceId) throws IOException {
         long tag = raw.getMessageProperties().getDeliveryTag();
-        log.info("收到报告生成消息: requestId={}", msg.requestId());
+
+        // S7: traceId 透传，消费端入 MDC
+        MDC.put(TraceIdFilter.TRACE_ID, traceId == null ? msg.requestId() : traceId);
 
         try {
             AiReport row = reportMapper.selectById(msg.reportId());
@@ -41,33 +63,77 @@ public class ReportConsumer {
                 return;
             }
 
-            // TODO: W5 将在这里接入真实的数据聚合 (ReportStats)
-            // 目前暂时使用模拟数据
-            String statsJson = "{\"total\":34,\"correct\":19,\"accuracy\":0.5588,\"weakPoints\":[{\"subject\":\"Java\",\"chapter\":\"集合\",\"wrong\":6}],\"practiceQuestionIds\":[37,12]}";
+            // S2: 接入真实的数据聚合 (ReportStats)
+            ReportStats stats = aggregator.collect(row.getUserId());
 
-            // 调用 AI 生成 (包含三层降级逻辑)
-            ReportResult result = aiService.generate(statsJson);
+            // 调用 AI 生成 (内部包含三层降级逻辑，永不抛出异常)
+            ReportResult result = aiService.generate(stats);
 
-            // 落库，注意这里的 status 是 1(成功) 或 2(降级)
-            row.setStatus(result.status());
-            row.setContent(result.contentJson());
-            row.setTokenCost(result.tokens());
-            row.setModel(result.model());
-            row.setErrorMsg(result.errorMsg());
-            row.setFinishTime(LocalDateTime.now());
+            // S4: 带条件的更新，防并发重复写，返回影响行数
+            int updated = reportMapper.markSuccessOrDegraded(
+                    row.getId(), result.status(), result.contentJson(),
+                    result.tokens(), result.model(), result.errorMsg());
 
-            // 这里的 updateById 建议在 W5 换成带条件的更新 (where status = 0)
-            // 以应对极端并发，不过目前已经有了 selectById 判断，先跑通即可
-            reportMapper.updateById(row);
+            if (updated > 0) {
+                log.info("report done, requestId={}, status={}, tokens={}, model={}",
+                        msg.requestId(), result.status(), result.tokens(), result.model());
 
+                // W5: SSE 推流预留位 (W5后续在这里调用 streamService.publish)
+                // streamService.publish(row.getRequestId(), result.contentJson(), result.status());
+
+            } else {
+                log.warn("报告状态更新失败，可能已被其他消费者处理: requestId={}", msg.requestId());
+            }
+
+            // 业务成功，确认消息
             channel.basicAck(tag, false);
-            log.info("报告生成完毕，已 ACK: requestId={}, status={}, tokens={}",
-                    msg.requestId(), result.status(), result.tokens());
 
         } catch (Exception e) {
-            log.error("消费异常，准备进入重试或死信", e);
-            // requeue = false，防止无限重试死循环
-            channel.basicNack(tag, false, false);
+            // S5: 处理异常重试与死信队列
+            int next = retryCount == null ? 1 : retryCount + 1;
+            log.warn("report consume failed, requestId={}, retry={}", msg.requestId(), next, e);
+
+            if (next <= MqConst.MAX_RETRY) {
+                // 进重试队列
+                republishToRetry(msg, next);
+            } else {
+                // 重试耗尽，写模板报告 + 投递死信
+                try {
+                    AiReport row = reportMapper.selectById(msg.reportId());
+                    if (row != null && row.getStatus() == 0) {
+                        ReportStats stats = aggregator.collect(row.getUserId());
+                        String content = template.build(stats, "retry_exhausted");
+                        reportMapper.markSuccessOrDegraded(row.getId(), 2, content, 0, "template-v1", "retry_exhausted: " + e.getMessage());
+                    }
+                    publishToDlq(msg, "retry_exhausted", e.getMessage());
+                } catch (Exception ex) {
+                    log.error("retry exhausted fallback also failed", ex);
+                }
+            }
+            // 原消息必须 ACK，否则会无限 requeue
+            channel.basicAck(tag, false);
+        } finally {
+            // S7: 线程池复用，必须清理 MDC
+            MDC.remove(TraceIdFilter.TRACE_ID);
         }
+    }
+
+    private void republishToRetry(ReportMessage msg, int next) {
+        rabbitTemplate.convertAndSend(MqConst.EXCHANGE, MqConst.RK_RETRY, msg, m -> {
+            m.getMessageProperties().setHeader("x-retry-count", next);
+            m.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
+            return m;
+        });
+    }
+
+    private void publishToDlq(ReportMessage msg, String reason, String detail) {
+        rabbitTemplate.convertAndSend(MqConst.EXCHANGE, MqConst.RK_DLQ,
+                Map.of("requestId", msg.requestId(), "userId", msg.userId(),
+                        "reason", reason, "detail", detail == null ? "" : detail,
+                        "at", java.time.LocalDateTime.now().toString()),
+                m -> {
+                    m.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
+                    return m;
+                });
     }
 }

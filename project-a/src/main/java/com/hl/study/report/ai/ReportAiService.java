@@ -1,61 +1,104 @@
 package com.hl.study.report.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 @Slf4j
 @Service
 public class ReportAiService {
 
-    @Resource
-    private ChatClient.Builder chatClientBuilder;
-
-    @Resource
-    private ObjectMapper objectMapper;
-
+    private final ChatClient chatClient;
+    private final TemplateReportGenerator template;
+    private final ObjectMapper objectMapper;
+    private final String userTemplate;
     private final BeanOutputConverter<ReportContent> converter = new BeanOutputConverter<>(ReportContent.class);
 
-    public ReportResult generate(String statsJson) {
+    /**
+     * 构造器注入：不仅注入了 ChatClient.Builder 和 ObjectMapper，
+     * 还读取了 classpath 下的 Prompt 模板文件（避免硬编码），以及降级模板。
+     */
+    public ReportAiService(ChatClient.Builder builder,
+                           TemplateReportGenerator template,
+                           ObjectMapper objectMapper,
+                           @Value("classpath:prompts/report-user.st") Resource userRes) throws java.io.IOException {
+        this.chatClient = builder.build();
+        this.template = template;
+        this.objectMapper = objectMapper;
+        // 正确读取 classpath 下的文件，不带 classpath: 前缀导致的坑
+        this.userTemplate = userRes.getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 生成报告核心逻辑。
+     * 原则：永不向上抛异常，AI 挂了就用 TemplateReportGenerator 兜底。
+     */
+    public ReportResult generate(ReportStats stats) {
+        // 降级 1：无数据，不消耗 token，直接出模板报告
+        if (stats.total() == 0) {
+            return ReportResult.degraded(template.build(stats, "no_data"), "no_data", "template-v1");
+        }
+
         try {
-            // 直接把 Prompt 硬编码在代码里，避免文件读取问题
-            String systemPrompt = "你是一名面向中国高校计算机专业学生的学情分析助手。你只能基于用户提供的统计数据做判断，不得编造题目、科目或数字。\n" +
-                    "输出必须是 JSON，字段与给定 schema 完全一致；不要输出 Markdown 代码块、不要输出解释性文字。\n" +
-                    "薄弱知识点必须来自 stats.weakPoints，practiceQuestionIds 必须来自 stats.practiceQuestionIds，不允许新增 id。";
-
-            String userPrompt = "以下是一名学生近 30 天的答题统计（JSON）：\n" +
-                    statsJson + "\n\n" +
-                    "请生成学情诊断：overall（整体表现，含答题数与正确率）、weakPoints（最多 5 条，按错误次数排序）、\n" +
-                    "causes（3 条以内原因推断）、suggestions（3--5 条可执行建议）、practiceQuestionIds（优先重练的题目 id）。\n" +
-                    converter.getFormat();
-
-            ChatResponse resp = chatClientBuilder.build().prompt()
-                    .system(systemPrompt)
-                    .user(userPrompt)
+            ChatResponse resp = chatClient.prompt()
+                    .user(u -> u.text(userTemplate)
+                            .param("stats", toJson(stats))
+                            .param("format", converter.getFormat()))
                     .call()
                     .chatResponse();
 
             String rawText = resp.getResult().getOutput().getText();
             ReportContent content = converter.convert(rawText);
 
-            int tokens = 0;
-            Usage usage = resp.getMetadata().getUsage();
-            if (usage != null && usage.getTotalTokens() != null) {
-                tokens = usage.getTotalTokens().intValue();
+            if (content == null || content.weakPoints() == null) {
+                throw new IllegalStateException("empty structured output");
             }
 
-            return ReportResult.ai(objectMapper.writeValueAsString(content), tokens, "deepseek-chat");
+            return ReportResult.ai(toJson(content), usageTokens(resp), "deepseek-chat");
 
         } catch (Exception e) {
-            log.warn("AI 调用失败，执行降级，原因: {}", e.getMessage());
-            // 降级逻辑：用一个最简单的模板拼装
-            String fallbackJson = String.format("{\"overall\":\"AI服务繁忙，已生成基础版报告。\",\"weakPoints\":[],\"causes\":[],\"suggestions\":[\"稍后再试\"],\"practiceQuestionIds\":[],\"degraded\":true}");
-            return ReportResult.degraded(fallbackJson, e.getMessage(), "template-v1");
+            // 降级 2：超时 / 401 / 429 / 5xx / 解析失败
+            log.warn("ai report degrade, reason={}", e.toString());
+            return ReportResult.degraded(template.build(stats, "ai_failed"), brief(e), "template-v1");
         }
+    }
+
+    // ================= 以下为辅助方法 =================
+
+    /** 对象序列化，供调用和内部使用 */
+    private String toJson(Object obj) {
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            log.warn("json serialize failed", e);
+            return "{}";
+        }
+    }
+
+    /** 从 ChatResponse 中获取 Token 消耗 */
+    private int usageTokens(ChatResponse resp) {
+        if (resp.getMetadata() == null || resp.getMetadata().getUsage() == null) {
+            return 0;
+        }
+        Usage usage = resp.getMetadata().getUsage();
+        return usage.getTotalTokens() == null ? 0 : usage.getTotalTokens().intValue();
+    }
+
+    /** 提取异常摘要，避免 error_msg 长度超限（小于 255 字符） */
+    private String brief(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null) {
+            msg = e.getClass().getSimpleName();
+        }
+        return msg.length() > 200 ? msg.substring(0, 200) : msg;
     }
 }
