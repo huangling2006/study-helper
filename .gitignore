@@ -31,3 +31,8 @@ deploy/redis-data/
 .DS_Store
 Thumbs.db
 *.env
+
+# 忽略 RabbitMQ 的持久化数据
+deploy/rabbitmq-data/
+# 忽略临时替换文件
+replace.txt
