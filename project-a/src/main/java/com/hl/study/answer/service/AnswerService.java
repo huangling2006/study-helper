@@ -8,19 +8,35 @@ import com.hl.study.common.BusinessException;
 import com.hl.study.common.ErrorCode;
 import com.hl.study.question.entity.Question;
 import com.hl.study.question.mapper.QuestionMapper;
+import com.hl.study.stat.service.CheckinBitmap;
+import com.hl.study.stat.service.DailyStatCounter;
 import com.hl.study.wrong.mapper.WrongBookMapper;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.time.LocalDate;
 
 @Service
 public class AnswerService {
+
     @Resource
     private QuestionMapper questionMapper;
+
     @Resource
     private UserAnswerRecordMapper answerRecordMapper;
+
     @Resource
     private WrongBookMapper wrongBookMapper;
+
+    // W5 新增：注入 Redis 统计组件
+    @Resource
+    private DailyStatCounter dailyStatCounter;
+
+    @Resource
+    private CheckinBitmap checkinBitmap;
 
     @Transactional(rollbackFor = Exception.class)
     public AnswerResultVO submit(Long userId, AnswerSubmitDTO dto) {
@@ -42,6 +58,19 @@ public class AnswerService {
             int affectedRows = wrongBookMapper.upsertWrongBook(userId, dto.getQuestionId());
             wrongBookAdded = (affectedRows == 1);
         }
+
+        // ==========================================
+        // W5 核心埋点：事务提交后，异步写入 Redis 统计
+        // ==========================================
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                // 1. 今日答题数 +1，正确数（如果答对）+1
+                dailyStatCounter.incrQuietly(userId, isCorrect);
+                // 2. 记录今日打卡
+                checkinBitmap.markQuietly(userId, LocalDate.now());
+            }
+        });
 
         return AnswerResultVO.builder()
                 .questionId(dto.getQuestionId())

@@ -9,5 +9,10 @@ public final class CacheKeys {
     public static final Duration TTL_HOT = Duration.ofMinutes(30);
     public static final Duration TTL_DETAIL = Duration.ofHours(1);
 
+    public static final String STAT_TODAY = "stat:answer:";
+    public static final String STAT_CHECKIN = "stat:checkin:";
+
+    public static final String REPORT_STREAM = "report:stream:";
+
     private CacheKeys() {}
 }
