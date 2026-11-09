@@ -14,6 +14,7 @@ spring:
       host: 127.0.0.1
       port: 6379
       password: ${REDIS_PASSWORD:} # 本地无密码留空
+      timeout: 2s # 【W5 新增】Redis 命令执行超时时间，防止 Redis 宕机导致接口长时间阻塞
   threads:
     virtual:
       enabled: true # JDK21 虚拟线程
@@ -50,7 +51,8 @@ spring:
         max-interval: 4s
       on-client-errors: false
     deepseek:
-      api-key: sk-placeholder # 千万别加引号
+      # 【提示】记得把这里换成你真实的 DeepSeek API Key，不然走的就是降级模板
+      api-key: sk-placeholder
       base-url: https://api.deepseek.com
       chat:
         options:
