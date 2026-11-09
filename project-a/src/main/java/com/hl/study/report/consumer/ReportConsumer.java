@@ -10,6 +10,7 @@ import com.hl.study.report.ai.TemplateReportGenerator;
 import com.hl.study.report.entity.AiReport;
 import com.hl.study.report.mapper.ReportMapper;
 import com.hl.study.report.service.ReportAggregator;
+import com.hl.study.report.service.ReportStreamService; // W5 新增导入
 import com.rabbitmq.client.Channel;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,10 @@ public class ReportConsumer {
 
     @Resource
     private RabbitTemplate rabbitTemplate;
+
+    // W5 新增：注入 SSE 服务
+    @Resource
+    private ReportStreamService streamService;
 
     @RabbitListener(queues = MqConst.QUEUE_MAIN, ackMode = "MANUAL")
     public void onMessage(ReportMessage msg, Message raw, Channel channel,
@@ -78,8 +83,8 @@ public class ReportConsumer {
                 log.info("report done, requestId={}, status={}, tokens={}, model={}",
                         msg.requestId(), result.status(), result.tokens(), result.model());
 
-                // W5: SSE 推流预留位 (W5后续在这里调用 streamService.publish)
-                // streamService.publish(row.getRequestId(), result.contentJson(), result.status());
+                // W5 新增：异步把报告推入 SSE 管道
+                streamService.publish(row.getRequestId(), result.contentJson(), result.status());
 
             } else {
                 log.warn("报告状态更新失败，可能已被其他消费者处理: requestId={}", msg.requestId());
