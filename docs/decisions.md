@@ -281,3 +281,34 @@
 - **问题**：大模型调用失败触发了降级，写了模板报告。但事后排查时，怎么知道当时是因为 401 鉴权失败、还是因为网络超时、还是因为没有数据？
 - **选择**：在 `ai_report` 表增加 `model`（区分是 deepseek-chat 还是 template-v1）和 `error_msg`（记录 401、timeout、no_data 等摘要）两列。
 - **放弃**：只打日志。因为日志会轮转（Log Rotation），一周后就查不到了；单独建一张日志表又过于沉重。记在业务表里，方便直接写 SQL 做降级率统计（如：`select count(*) from ai_report where status=2`）。
+
+### W5 踩坑记录
+
+**踩坑 1：Redis 宕机导致整个业务接口卡死超时（Lettuce 默认超时机制）**
+- **现象**：为了验证降级，我手动停掉了 Redis，结果发现接口并没有立刻去查 MySQL，而是卡了非常久，最后报了 `ReadTimeoutException`。
+- **原因**：Spring Data Redis 底层使用的 Lettuce 客户端，默认的连接和命令执行超时时间非常长（60秒）。它一直傻等 Redis 恢复，导致 Tomcat 线程被长时间阻塞，这在高并发下会直接拖垮整个服务。
+- **解决**：在 `application.yml` 中配置 `spring.data.redis.timeout=2s`，实现快速失败（Fail-Fast）。
+- **面试话术**：“我做过缓存降级测试，发现仅仅写 try-catch 是不够的。因为 Redis 客户端默认超时时间很长，如果缓存雪崩或宕机，请求会卡在等连接上，导致 Tomcat 线程耗尽。所以我显式配置了 2 秒超时，配合降级代码，保证主链路的高可用。”
+
+**踩坑 2：拦截器抛异常拦截了缓存降级**
+- **现象**：配置了 2 秒超时后，再次停掉 Redis 测接口，接口直接返回了 500 `RedisConnectionFailureException`，根本没有走到我写的 `StatService` 里的降级代码。
+- **原因**：因为项目配置了鉴权拦截器 `LoginInterceptor`，它每次请求都要去 Redis 里校验 Token 是否有效。Redis 一挂，拦截器直接抛出异常被全局异常处理器捕获，请求根本没进 Controller。
+- **解决**：在拦截器里 catch `RedisConnectionFailureException`。如果 Redis 彻底挂了，降级为“仅校验 JWT 签名，不验主动登出”，放行请求。
+- **面试话术**：“降级不能只考虑业务层。我的鉴权逻辑强依赖 Redis 校验 Token，如果 Redis 挂了，整个系统都会变成 500 死锁。所以我在拦截器层也做了容错，Redis 不可用时降级为无状态的 JWT 校验，虽然暂时失去了‘主动踢人下线’的能力，但保住了核心业务的可用性。”
+
+**踩坑 3：Spring 6 的 TaskScheduler 调度报错**
+- **现象**：在写 SSE 轮询推流时，调用 `taskScheduler.scheduleWithFixedDelay` 报编译错误，提示找不到合适的方法。
+- **原因**：Spring 6（对应 Spring Boot 3）把这个方法的 4 参数重载（任务, 初始延迟, 延迟时间, 时间单位）删掉了，只剩下了 2 个参数。
+- **解决**：改成传入 `Runnable` 和 `Duration` 对象（如 `Duration.ofMillis(800)`），并且必须要显式注入一个 `ThreadPoolTaskScheduler` 的 Bean，防止每次请求都新建线程导致 OOM。
+
+**踩坑 4：Windows PowerShell 的 curl 别名导致 SSE 测试失败**
+- **现象**：用终端测 SSE 接口时，报错 `Cannot bind parameter 'Headers'`。
+- **原因**：在 Windows PowerShell 里，`curl` 是 `Invoke-WebRequest` 的内置别名，它不支持 Linux 下原生的 `-N`（禁用缓冲）参数。
+- **解决**：必须使用 `curl.exe` 来执行原生的 cURL 命令，才能看到流式响应的效果。
+- **面试话术**：“测试流式接口时，一定要用 `curl.exe -N` 禁用缓冲。用 Postman 或者 IDEA 的 HTTP Client 默认会等全部响应结束才显示，根本看不出流式的效果。”
+
+**踩坑 5：小数据量下 MySQL 未命中索引**
+- **现象**：对历史报告列表的 SQL 做 `EXPLAIN`，发现 `type: ALL`（全表扫描），没走 `idx_user_time`。
+- **原因**：因为此时 `ai_report` 表里只有 9 行数据。MySQL 优化器评估后认为，走二级索引再回表查数据的成本，比直接全表扫描还要高。
+- **解决与认知**：不需要刻意去加 `FORCE INDEX`。我清楚地知道，当数据量突破几千上万条后，优化器必然会走 `idx_user_time`。
+- **面试话术**：“我在小数据量下测过 EXPLAIN，发现没走索引，这是 MySQL 优化器的成本决策。但我建立的 `(user_id, create_time)` 联合索引和 `ORDER BY create_time DESC, id DESC` 完全契合，一旦数据量上去，必然会触发 `Backward index scan` 反向扫描，避免 filesort 排序。”
