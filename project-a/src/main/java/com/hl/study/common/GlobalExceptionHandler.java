@@ -1,6 +1,7 @@
 package com.hl.study.common;
 
 import io.swagger.v3.oas.annotations.Hidden;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -10,7 +11,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.stream.Collectors;
 
-@Hidden // 关键：防止 Swagger 扫描这个类导致文档报错
+@Hidden
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -19,8 +20,6 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<R<Void>> handleBiz(BusinessException e) {
         log.warn("business error, code={}, msg={}", e.getCode(), e.getMessage());
-
-        // 使用 JDK 21 的 switch 表达式映射 HTTP 状态
         HttpStatus status = switch (e.getCode()) {
             case 401 -> HttpStatus.UNAUTHORIZED;
             case 403 -> HttpStatus.FORBIDDEN;
@@ -31,13 +30,23 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(status).body(R.fail(e.getCode(), e.getMessage()));
     }
 
-    /** 参数校验异常：把字段级错误拼成一句话，并返回 HTTP 400 */
+    /** 参数校验异常 (针对 @RequestBody DTO)：返回 HTTP 400 */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<R<Void>> handleValid(MethodArgumentNotValidException e) {
         String msg = e.getBindingResult().getFieldErrors().stream()
                 .map(f -> f.getField() + ":" + f.getDefaultMessage())
                 .collect(Collectors.joining(", "));
-        // 状态码设为 400
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(R.fail(ErrorCode.PARAM_ERROR.getCode(), msg));
+    }
+
+    /** 【S13 新增】参数越界异常 (针对 @RequestParam 上的 @Max/@Min)：返回 HTTP 400 */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<R<Void>> handleConstraint(ConstraintViolationException e) {
+        String msg = e.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + ":" + v.getMessage())
+                .collect(Collectors.joining(", "));
+        log.warn("constraint violation: {}", msg);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(R.fail(ErrorCode.PARAM_ERROR.getCode(), msg));
     }
@@ -46,7 +55,6 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<R<Void>> handleEx(Exception e) {
         log.error("system error", e);
-        // 状态码设为 500
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(R.fail(ErrorCode.SYSTEM_ERROR.getCode(), ErrorCode.SYSTEM_ERROR.getMessage()));
     }

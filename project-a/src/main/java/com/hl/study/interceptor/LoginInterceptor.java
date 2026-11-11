@@ -8,7 +8,7 @@ import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
@@ -17,7 +17,6 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @Component
 public class LoginInterceptor implements HandlerInterceptor {
 
-    // 【修复点】：补上你在 UserServiceImpl 里用到的常量
     public static final String REDIS_TOKEN_KEY = "login:token:";
 
     @Resource
@@ -43,14 +42,13 @@ public class LoginInterceptor implements HandlerInterceptor {
 
         // 3. 校验 Redis 中的 Token（防主动登出）
         try {
-            // 使用常量拼接 key
             String redisToken = stringRedisTemplate.opsForValue().get(REDIS_TOKEN_KEY + userId);
             if (redisToken == null || !redisToken.equals(token)) {
                 throw new BusinessException(ErrorCode.UNAUTHORIZED);
             }
-        } catch (RedisConnectionFailureException e) {
-            // 【W5 容错】：如果 Redis 彻底宕机，为了保住核心业务，降级为“仅校验 JWT 签名”
-            log.warn("Redis is down, fallback to stateless JWT check, userId={}", userId);
+        } catch (DataAccessException e) {
+            // 【S13 修复】：放宽到 DataAccessException，涵盖 Redis 连接失败和超时异常
+            log.warn("Redis unavailable or timeout, fallback to stateless JWT check, userId={}", userId, e);
         }
 
         // 4. 放入 ThreadLocal

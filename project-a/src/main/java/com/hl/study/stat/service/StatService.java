@@ -4,13 +4,11 @@ import com.hl.study.stat.dto.AnswerCount;
 import com.hl.study.stat.dto.DailyStat;
 import com.hl.study.stat.dto.SubjectStat;
 import com.hl.study.stat.mapper.StatMapper;
+import com.hl.study.stat.vo.SubjectStatVO;
 import com.hl.study.stat.vo.TodayStatVO;
 import com.hl.study.stat.vo.TrendVO;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataAccessException;
-import org.springframework.data.redis.RedisConnectionFailureException;
-import org.springframework.data.redis.RedisSystemException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -34,23 +32,18 @@ public class StatService {
         LocalDate day = LocalDate.now();
         AnswerCount c = null;
 
-        // 1. 尝试从 Redis 读
         try {
             c = counter.read(userId, day);
         } catch (Exception e) {
-            // 【W5 修复】：Redis 宕机时可能抛出 RedisConnectionFailureException 等底层异常
-            // 我们在这里捕获所有异常并记录日志，确保不走全局 500，而是触发降级。
             log.warn("stat redis unavailable, fallback to db, userId={}, error={}", userId, e.getClass().getSimpleName());
         }
 
-        // 2. 未命中或 Redis 挂了，降级查库并回填
         if (c == null) {
             c = statMapper.countBetween(userId, day.atStartOfDay(), day.plusDays(1).atStartOfDay());
-            if (c == null) c = new AnswerCount(0L, 0L); // 防 NPE
+            if (c == null) c = new AnswerCount(0L, 0L);
             counter.backfillQuietly(userId, day, c);
         }
 
-        // 3. 计算打卡
         int streak, lastStreak;
         try {
             streak = checkin.streak(userId, day);
@@ -58,7 +51,7 @@ public class StatService {
         } catch (Exception e) {
             log.warn("checkin bitmap unavailable, fallback to db, userId={}", userId);
             streak = -1;
-            lastStreak = -1; // -1 表示统计不可用，前端显示 "--"
+            lastStreak = -1;
         }
 
         return TodayStatVO.builder()
@@ -72,9 +65,19 @@ public class StatService {
                 .build();
     }
 
-    public List<SubjectStat> subject(Long userId) {
+    // ================= 【S2 修复】：返回带 accuracy 的 VO =================
+    public List<SubjectStatVO> subject(Long userId) {
         LocalDate from30 = LocalDate.now().minusDays(29);
-        return statMapper.selectSubject(userId, from30.atStartOfDay());
+        List<SubjectStat> list = statMapper.selectSubject(userId, from30.atStartOfDay());
+
+        return list.stream().map(s -> {
+            SubjectStatVO vo = new SubjectStatVO();
+            vo.setSubject(s.getSubject());
+            vo.setTotal(s.getTotal());
+            vo.setCorrect(s.getCorrect());
+            vo.setAccuracy(rate(s.getCorrect(), s.getTotal()));
+            return vo;
+        }).toList();
     }
 
     public TrendVO trend(Long userId, int days) {

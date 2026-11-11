@@ -39,7 +39,7 @@ public class ReportStreamService {
         String doneKey = listKey + ":done";
         try {
             JsonNode root = objectMapper.readTree(contentJson);
-            for (String field : List.of("overall", "weakPoints", "causes", "suggestions", "practiceIds")) {
+            for (String field : List.of("overall", "weakPoints", "causes", "suggestions", "practiceQuestionIds")) {
                 JsonNode node = root.get(field);
                 if (node != null) {
                     String seg = objectMapper.writeValueAsString(Map.of("type", field, "text", node.toString()));

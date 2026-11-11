@@ -1,14 +1,18 @@
 package com.hl.study.report.controller;
 
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hl.study.common.R;
 import com.hl.study.context.CurrentUser;
+import com.hl.study.report.dto.ReportHistoryQueryDTO;
 import com.hl.study.report.service.ReportService;
 import com.hl.study.report.service.ReportStreamService;
+import com.hl.study.report.vo.ReportHistoryVO;
 import com.hl.study.report.vo.ReportStatusVO;
 import com.hl.study.user.entity.User;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
+import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -31,6 +35,14 @@ public class ReportController {
     @Operation(summary = "触发学情报告生成（异步）")
     public R<ReportStatusVO> generate(@CurrentUser User user) {
         return R.ok(reportService.trigger(user.getId()));
+    }
+
+    // ================= 【S1 新增】历史报告列表 =================
+    // 注意：这个端点必须放在 /{requestId} 前面，否则 Spring 会把 "history" 当作 requestId 匹配
+    @GetMapping("/history")
+    @Operation(summary = "历史报告列表（摘要，只能查自己）")
+    public R<Page<ReportHistoryVO>> history(@Valid ReportHistoryQueryDTO dto, @CurrentUser User user) {
+        return R.ok(reportService.listHistory(user.getId(), dto));
     }
 
     @GetMapping("/{requestId}")

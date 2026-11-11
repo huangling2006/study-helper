@@ -24,7 +24,7 @@ spring:
     host: 127.0.0.1
     port: 5672
     username: study
-    password: study123
+    password: ${MQ_PASSWORD:study123} # 【W5 修复】密码外置，防泄露
     publisher-confirm-type: correlated # 开启确认机制
     publisher-returns: true            # 开启退回机制
     template:
@@ -51,8 +51,8 @@ spring:
         max-interval: 4s
       on-client-errors: false
     deepseek:
-      # 【提示】记得把这里换成你真实的 DeepSeek API Key，不然走的就是降级模板
-      api-key: sk-placeholder
+      # 【W5 修复】密钥彻底外置，从 IDEA 环境变量或系统环境变量读取。默认留空防泄露。
+      api-key: ${DEEPSEEK_API_KEY:}
       base-url: https://api.deepseek.com
       chat:
         options:

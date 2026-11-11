@@ -2,8 +2,8 @@ package com.hl.study.stat.controller;
 
 import com.hl.study.common.R;
 import com.hl.study.context.CurrentUser;
-import com.hl.study.stat.dto.SubjectStat;
 import com.hl.study.stat.service.StatService;
+import com.hl.study.stat.vo.SubjectStatVO;
 import com.hl.study.stat.vo.TodayStatVO;
 import com.hl.study.stat.vo.TrendVO;
 import com.hl.study.user.entity.User;
@@ -35,9 +35,10 @@ public class StatController {
         return R.ok(statService.today(user.getId()));
     }
 
+    // ================= 【S2 修复】：返回 List<SubjectStatVO> =================
     @GetMapping("/subject")
     @Operation(summary = "科目正确率分布")
-    public R<List<SubjectStat>> subject(@CurrentUser User user) {
+    public R<List<SubjectStatVO>> subject(@CurrentUser User user) {
         return R.ok(statService.subject(user.getId()));
     }
 
@@ -46,7 +47,7 @@ public class StatController {
     public R<TrendVO> trend(
             @CurrentUser User user,
             @RequestParam(defaultValue = "7")
-            @Min(1) @Max(30) Integer days) { // 限制 1-30 天，防刷
+            @Min(1) @Max(30) Integer days) {
         return R.ok(statService.trend(user.getId(), days));
     }
 }

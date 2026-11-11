@@ -2,6 +2,7 @@ package com.hl.study.report.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.hl.study.report.entity.AiReport;
+import com.hl.study.report.vo.ReportHistoryVO;
 import com.hl.study.stat.dto.AnswerCount;
 import com.hl.study.stat.dto.DailyStat;
 import com.hl.study.stat.dto.WeakPointRaw;
@@ -66,4 +67,29 @@ public interface ReportMapper extends BaseMapper<AiReport> {
                               @Param("tokens") Integer tokens,
                               @Param("model") String model,
                               @Param("errorMsg") String errorMsg);
+
+    // ================= 新增：历史列表 =================
+
+    @Select("""
+            SELECT request_id AS requestId,
+                   status,
+                   token_cost AS tokenCost,
+                   model,
+                   create_time AS createTime,
+                   finish_time AS finishTime,
+                   LEFT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(content, '$.overall')), ''), 80) AS overview,
+                   CASE WHEN JSON_VALID(content)
+                        THEN JSON_LENGTH(COALESCE(JSON_EXTRACT(content, '$.weakPoints'), JSON_ARRAY()))
+                        ELSE 0 END AS weakPointCount
+            FROM ai_report
+            WHERE user_id = #{userId}
+            ORDER BY create_time DESC, id DESC
+            LIMIT #{offset}, #{size}
+            """)
+    List<ReportHistoryVO> selectHistory(@Param("userId") Long userId,
+                                        @Param("offset") long offset,
+                                        @Param("size") long size);
+
+    @Select("SELECT COUNT(*) FROM ai_report WHERE user_id = #{userId}")
+    long countHistory(@Param("userId") Long userId);
 }
