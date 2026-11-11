@@ -68,3 +68,43 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpY
 ###
 GET http://localhost:8080/api/report/8e0a95ee051541318707f124e408be40
 Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTM3OTIyNzEsImV4cCI6MTc5Mzc5OTQ3MX0.a_LyJ-Dyo5wAsM5gZ5sxvle6GVrp23YFQ6mgb-Qv6sAWoH6dYKlqG4FkBmiDwuBI
+
+### 1. 答题制造数据（随便填个答案，期望 200）
+POST http://localhost:8080/api/answer/submit
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTQyMzEzODMsImV4cCI6MTc5NDIzODU4M30.e9F7ZUHE5A1Tj5Tu39dXXuwj7qzj3BCnFN_EnP8RPEryX2E8osSmTBi7GDMFSR1U
+Content-Type: application/json
+
+{
+  "questionId": 1,
+  "userAnswer": "A"
+}
+
+### 2. 再答题制造数据
+POST http://localhost:8080/api/answer/submit
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTQyMzEzODMsImV4cCI6MTc5NDIzODU4M30.e9F7ZUHE5A1Tj5Tu39dXXuwj7qzj3BCnFN_EnP8RPEryX2E8osSmTBi7GDMFSR1U
+Content-Type: application/json
+
+{
+  "questionId": 2,
+  "userAnswer": "B"
+}
+
+### 3. 验证今日概览（重点看 todayTotal 是不是 >= 2，streak 是不是 >= 1）
+GET http://localhost:8080/api/stat/today
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTQyMzEzODMsImV4cCI6MTc5NDIzODU4M30.e9F7ZUHE5A1Tj5Tu39dXXuwj7qzj3BCnFN_EnP8RPEryX2E8osSmTBi7GDMFSR1U
+
+### 4. 验证近 7 日趋势（重点看是不是刚好返回 7 个点，且日期连续）
+GET http://localhost:8080/api/stat/trend?days=7
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTQyMzEzODMsImV4cCI6MTc5NDIzODU4M30.e9F7ZUHE5A1Tj5Tu39dXXuwj7qzj3BCnFN_EnP8RPEryX2E8osSmTBi7GDMFSR1U
+
+### 5. 验证历史报告列表
+GET http://localhost:8080/api/report/history?page=1&size=5
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTQyMzEzODMsImV4cCI6MTc5NDIzODU4M30.e9F7ZUHE5A1Tj5Tu39dXXuwj7qzj3BCnFN_EnP8RPEryX2E8osSmTBi7GDMFSR1U
+
+###
+POST http://localhost:8080/api/report/generate
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTQyMzEzODMsImV4cCI6MTc5NDIzODU4M30.e9F7ZUHE5A1Tj5Tu39dXXuwj7qzj3BCnFN_EnP8RPEryX2E8osSmTBi7GDMFSR1U
+
+###
+GET http://localhost:8080/api/stat/today
+Authorization: Bearer eyJhbGciOiJIUzM4NCJ9.eyJzdWIiOiIyIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3OTQyMzEzODMsImV4cCI6MTc5NDIzODU4M30.e9F7ZUHE5A1Tj5Tu39dXXuwj7qzj3BCnFN_EnP8RPEryX2E8osSmTBi7GDMFSR1U

@@ -312,3 +312,28 @@
 - **原因**：因为此时 `ai_report` 表里只有 9 行数据。MySQL 优化器评估后认为，走二级索引再回表查数据的成本，比直接全表扫描还要高。
 - **解决与认知**：不需要刻意去加 `FORCE INDEX`。我清楚地知道，当数据量突破几千上万条后，优化器必然会走 `idx_user_time`。
 - **面试话术**：“我在小数据量下测过 EXPLAIN，发现没走索引，这是 MySQL 优化器的成本决策。但我建立的 `(user_id, create_time)` 联合索引和 `ORDER BY create_time DESC, id DESC` 完全契合，一旦数据量上去，必然会触发 `Backward index scan` 反向扫描，避免 filesort 排序。”
+
+
+## 29 MySQL 为真值、Redis 为加速层；不一致时以 SQL 为准
+问题：统计数字有两个来源，谁说了算。候选：① 只查 MySQL；② 只信 Redis；③ Redis 加速 + MySQL 兜底且为真值。选择 ③。放弃 ①：每次答题都聚合，数据量大后接口变慢；放弃 ②：Redis 重启/清空后统计直接错。验证：verify_stat.py 的 diff=0。局限：读路径不做自动纠错，只在对账脚本里暴露，靠人工 DEL 触发回填。
+
+## 30 回填只在 key 不存在时做，不在命中时纠正
+问题：发现不一致时要不要顺手改。候选：① 每次读都校验并覆盖；② 只在 miss 时回填。选择 ②。放弃 ①：读与答题写并发，覆盖会把刚自增的一次抹掉，制造新错。代价：不一致要靠脚本发现。
+
+## 31 Redis 不可用时统计降级直查 MySQL，catch 粒度定在 DataAccessException
+问题：缓存故障时接口该报错还是变慢。候选：① 500；② 返回全 0；③ 降级直查。选择 ③。放弃 ②：把“不知道”显示成“0”比报错更糟。放弃 catch Exception：会把 NPE 这类代码 bug 伪装成 Redis 故障。验证：验收停 Redis 后 200。
+
+## 32 今日计数用 HASH + Lua（HINCRBY + EXPIREAT），TTL 定在次日 02:00
+问题：计数怎么存、什么时候过期。候选：① 两个 String key 分别 INCR；② HASH + 两条命令；③ HASH + Lua 原子。选择 ③。放弃 ①/②：EXPIRE 失败即永久 key。TTL 用 EXPIREAT 而非 EXPIRE：绝对时间不受执行延迟影响。
+
+## 33 连续打卡用 Bitmap + BITFIELD 整月读，streak 与 lastStreak 分开
+问题：连续天数怎么算。候选：① 日期比对；② 每天一个 String key；③ Bitmap 每月一 key。选择 ③。放弃 ①：要遍历结果集；放弃 ②：读一次要 30 次往返。细节：offset=日-1，BITFIELD GET u31 一次取整月，位序按 MSB 计算。
+
+## 34 历史列表做真分页，只返回摘要；排序必须带 id 兜底
+问题：03 写“最近 10 份摘要”又给了 page/size。候选：① 固定 10 条；② 真分页 + 摘要投影。选择 ②。实现：ORDER BY create_time DESC, id DESC；摘要用 JSON_EXTRACT + JSON_VALID 在库内算。局限：JSON 函数无法走索引，但只作用于当前用户的分页窗口。
+
+## 35 SSE 做分段回放，不做 token 级流式；鉴权走 Authorization 头
+问题：简历写了“SSE 流式返回”，做成什么样。候选：① 真流式；② 分段回放；③ 不做。选择 ②。放弃 ①：流式文本无法解析成 ReportContent。放弃 ③：成本可控。鉴权：不加 ?token=，前端用 fetch + ReadableStream。
+
+## 36 统计不做预聚合表，写明触发条件
+问题：什么时候算大。候选：① 现在就建 stat_daily 表；② 不建，写清触发条件。选择 ②。触发条件：单用户 >10 万条答题记录，或统计接口 P95 >200ms。验证：benchmark W5 段的三组数字。局限：真到阈值时改造要动答题链路。
