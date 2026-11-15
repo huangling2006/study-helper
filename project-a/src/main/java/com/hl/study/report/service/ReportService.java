@@ -6,6 +6,8 @@ import com.hl.study.common.BusinessException;
 import com.hl.study.common.ErrorCode;
 import com.hl.study.mq.MqConst;
 import com.hl.study.mq.ReportMessage;
+import com.hl.study.report.ai.ReportStats;
+import com.hl.study.report.ai.TemplateReportGenerator;
 import com.hl.study.report.dto.ReportHistoryQueryDTO;
 import com.hl.study.report.entity.AiReport;
 import com.hl.study.report.mapper.ReportMapper;
@@ -20,7 +22,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
@@ -34,6 +36,8 @@ public class ReportService {
     private RabbitTemplate rabbitTemplate;
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private TemplateReportGenerator templateReportGenerator;
 
     public ReportStatusVO trigger(Long userId) {
         // 1. 限流：SET NX EX 60，value 存 requestId
@@ -58,7 +62,6 @@ public class ReportService {
         try {
             ReportMessage msg = new ReportMessage(report.getId(), userId, requestId);
 
-            // 【S4 修复】：构造 CorrelationData
             CorrelationData cd = new CorrelationData(requestId);
 
             rabbitTemplate.convertAndSend(MqConst.EXCHANGE, MqConst.RK_GENERATE, msg, m -> {
@@ -67,7 +70,7 @@ public class ReportService {
                 return m;
             }, cd);
 
-            // 【S4 修复】：异步 confirm 回调，投递失败则本地降级
+            // 异步 confirm 回调，投递失败则本地降级
             cd.getFuture().whenComplete((confirm, ex) -> {
                 if (ex != null || confirm == null || !confirm.isAck()) {
                     log.error("publish not confirmed, degrade locally, requestId={}", requestId, ex);
@@ -76,7 +79,7 @@ public class ReportService {
             });
 
         } catch (Exception e) {
-            // 【S4 修复】：同步抛出异常时（如连接断开），不再返回 500，直接降级返回 200
+            // 同步抛出异常时（如连接断开），不再返回 500，直接降级返回 200
             log.error("publish report failed, degrade locally, requestId={}", requestId, e);
             stringRedisTemplate.delete(limitKey); // 投递失败，删掉限流key
             degradeLocally(report.getId(), "publish_failed");
@@ -108,6 +111,11 @@ public class ReportService {
         vo.setAiSuccess(r.getStatus() == 1);
         vo.setContent(r.getContent());
         vo.setTokenCost(r.getTokenCost());
+
+        // 【M1 修复】：补全时间字段
+        vo.setCreateTime(r.getCreateTime());
+        vo.setFinishTime(r.getFinishTime());
+
         return vo;
     }
 
@@ -129,16 +137,16 @@ public class ReportService {
 
     // ================= S4 新增：本地降级逻辑 =================
     private void degradeLocally(Long reportId, String reason) {
-        // 生成模板化的 JSON 内容 (保证五段格式存在，防止前端解析报错)
-        String templateContent = """
-            {
-              "overall": "AI服务当前繁忙，已为你生成基础版学情诊断。",
-              "weakPoints": [{"name": "基础知识点", "wrongCount": 0, "wrongRate": 0.0}],
-              "causes": ["网络或AI服务暂时不可用，未能深入分析薄弱点"],
-              "suggestions": ["请稍后重新生成报告获取精准分析", "建议先复习错题本中错误次数最多的题目"],
-              "practiceQuestionIds": []
-            }
-            """;
+        // 【M2 修复】：使用真实的 TemplateReportGenerator 替代手写假 JSON
+        // 构造一个空统计对象作为兜底，避免 NPE
+        ReportStats emptyStats = new ReportStats(
+                0, 0, 0.0, "平稳",
+                Collections.emptyList(),
+                Collections.emptyList()
+        );
+
+        // 生成带真实格式的降级模板
+        String templateContent = templateReportGenerator.build(emptyStats, reason);
 
         // 更新数据库：状态置为 2，写入模板内容
         int updated = reportMapper.markSuccessOrDegraded(

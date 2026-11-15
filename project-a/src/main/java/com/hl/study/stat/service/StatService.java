@@ -9,6 +9,7 @@ import com.hl.study.stat.vo.TodayStatVO;
 import com.hl.study.stat.vo.TrendVO;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -34,7 +35,8 @@ public class StatService {
 
         try {
             c = counter.read(userId, day);
-        } catch (Exception e) {
+        } catch (DataAccessException e) {
+            // 只拦截基础设施异常（如 Redis 宕机、超时），不吞 NPE 等代码 Bug
             log.warn("stat redis unavailable, fallback to db, userId={}, error={}", userId, e.getClass().getSimpleName());
         }
 
@@ -48,7 +50,7 @@ public class StatService {
         try {
             streak = checkin.streak(userId, day);
             lastStreak = checkin.streak(userId, day.minusDays(1));
-        } catch (Exception e) {
+        } catch (DataAccessException e) {
             log.warn("checkin bitmap unavailable, fallback to db, userId={}", userId);
             streak = -1;
             lastStreak = -1;

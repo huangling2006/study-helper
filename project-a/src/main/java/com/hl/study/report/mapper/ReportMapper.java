@@ -77,7 +77,9 @@ public interface ReportMapper extends BaseMapper<AiReport> {
                    model,
                    create_time AS createTime,
                    finish_time AS finishTime,
-                   LEFT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(content, '$.overall')), ''), 80) AS overview,
+                   CASE WHEN JSON_VALID(content)
+                        THEN LEFT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(content, '$.overall')), ''), 80)
+                        ELSE '' END AS overview,
                    CASE WHEN JSON_VALID(content)
                         THEN JSON_LENGTH(COALESCE(JSON_EXTRACT(content, '$.weakPoints'), JSON_ARRAY()))
                         ELSE 0 END AS weakPointCount

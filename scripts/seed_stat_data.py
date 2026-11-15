@@ -1,110 +1,108 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-W5 造数脚本：
-1. 走接口真实刷 40 道题（保留判分与错题归集链路）。
-2. 通过 UPDATE 将其中 18 条记录的时间分散到过去 6 天（仅限本地造数，严禁用于生产）。
-"""
-import json
+import requests
+import pymysql
 import subprocess
-import urllib.request
-import random
+import datetime
 
-BASE = "http://localhost:8080"
+BASE_URL = "http://localhost:8080"
+USERNAME = "wrongtest1"
+PASSWORD = "test12345"
 
-def login(username="wrongtest1", password="test12345"):
-    req = urllib.request.Request(
-        BASE + "/api/user/login",
-        data=json.dumps({"username": username, "password": password}).encode(),
-        headers={"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(req) as r:
-        return json.load(r)["data"]["token"]
+# 数据库配置
+db = pymysql.connect(host='127.0.0.1', port=3307, user='root', password='root123', database='study_helper', autocommit=True)
+cursor = db.cursor()
 
-def get(path, tok):
-    req = urllib.request.Request(BASE + path, headers={"Authorization": "Bearer " + tok})
-    with urllib.request.urlopen(req) as r:
-        return json.load(r)
+def sql_execute(sql, args=None):
+    cursor.execute(sql, args)
+    return cursor.fetchall()
 
-def post(path, tok, body):
-    req = urllib.request.Request(
-        BASE + path,
-        data=json.dumps(body).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + tok
-        }
-    )
-    with urllib.request.urlopen(req) as r:
-        return json.load(r)
+def login():
+    resp = requests.post(f"{BASE_URL}/api/user/login", json={"username": USERNAME, "password": PASSWORD})
+    return resp.json()["data"]["token"]
 
-def mysql(sql):
-    """在 Docker 容器中执行 MySQL 命令"""
-    result = subprocess.run(
-        ["docker", "exec", "study-mysql", "mysql", "-uroot", "-proot123", "study_helper", "-N", "-e", sql],
-        capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print("SQL Error:", result.stderr)
-        return ""
-    return result.stdout.strip()
+def submit(token, qid, answer):
+    headers = {"Authorization": f"Bearer {token}"}
+    requests.post(f"{BASE_URL}/api/answer/submit", json={"questionId": qid, "userAnswer": answer}, headers=headers)
 
-if __name__ == "__main__":
-    print("1. 开始登录获取 Token...")
-    try:
-        tok = login()
-    except Exception as e:
-        print("登录失败，请确认应用已启动且 wrongtest1 账号存在。", e)
-        exit(1)
+print("1. 开始登录...")
+token = login()
 
-    print("2. 拉取 40 道题目...")
-    qs = get("/api/question/list?page=1&size=40", tok)["data"]["records"]
+print("2. 按科目各拉取 10 道题...")
+headers = {"Authorization": f"Bearer {token}"}
+subjects = ["Java", "MySQL", "Redis"]
+questions_to_submit = []
 
-    print("3. 从数据库获取正确答案（因为接口不返回 answer）...")
-    right_answers = {}
-    rows = mysql("SELECT id, answer FROM question LIMIT 40").splitlines()
-    for row in rows:
-        if "\t" in row:
-            qid, ans = row.split("\t")
-            right_answers[qid] = ans
+for sub in subjects:
+    # 拉取对应科目的题
+    resp = requests.get(f"{BASE_URL}/api/question/list?subject={sub}&page=1&size=10", headers=headers)
+    records = resp.json()["data"]["records"]
+    questions_to_submit.extend(records)
 
-    print("4. 开始刷题（60% 概率故意答错）...")
-    success_count = 0
-    for i, q in enumerate(qs):
-        qid = str(q["id"])
-        correct = right_answers.get(qid, "A")
+print(f"✅ 获取到 {len(questions_to_submit)} 道题。")
 
-        if random.random() < 0.6: # 60% 答错
-            submit = next(c for c in "ABCD" if c != correct)
-        else:
-            submit = correct
+print("3. 从数据库获取正确答案...")
+right_answers = {}
+for q in questions_to_submit:
+    res = sql_execute("SELECT answer FROM question WHERE id = %s", (q["id"],))
+    right_answers[q["id"]] = res[0][0]
 
-        try:
-            post("/api/answer/submit", tok, {"questionId": q["id"], "userAnswer": submit})
-            success_count += 1
-        except Exception as e:
-            print(f"题目 {qid} 提交失败: {e}")
+print("4. 开始刷题（60% 故意答错）...")
+for i, q in enumerate(questions_to_submit):
+    qid = q["id"]
+    correct = right_answers[qid]
+    if i % 5 < 3:  # 60% 错
+        wrong = next(c for c in "ABCD" if c != correct)
+        submit(token, qid, wrong)
+    else:
+        submit(token, qid, correct)
 
-    print(f"✅ 成功刷了 {success_count} 道题。")
+print("5. 将前 18 条记录的时间分散到过去 6 天（仅本地造数）...")
+today = datetime.date.today()
 
-    print("5. 将前 18 条记录的时间分散到过去 6 天（仅本地造数）...")
-    # 先查出最新写入的 18 条记录的主键 ID
-    ids = mysql("SELECT id FROM user_answer_record WHERE user_id = 2 ORDER BY id DESC LIMIT 18;").splitlines()
+# 查出最近 18 条记录的 id，作为我们要修改的目标
+recent_records = sql_execute("SELECT id FROM user_answer_record WHERE user_id = 2 ORDER BY id DESC LIMIT 18")
+recent_ids = [r[0] for r in recent_records]
 
-    # 按顺序分配到过去 6 天，每天分配 3 条
-    for i, record_id in enumerate(ids):
-        d = (i // 3) + 1  # 比如前 3 条是 1 天前，接下来 3 条是 2 天前...
-        sql = f"""
+for d in range(1, 7):
+    target_date = today - datetime.timedelta(days=d)
+
+    # 从列表中每次取 3 个 ID 出来
+    chunk_ids = recent_ids[(d-1)*3 : d*3]
+    if not chunk_ids:
+        break
+    ids_str = ",".join(map(str, chunk_ids))
+
+    # 精准更新这几个 id 的时间
+    sql_execute(f"""
         UPDATE user_answer_record 
-        SET create_time = DATE_SUB(NOW(), INTERVAL {d} DAY) + INTERVAL {d*3} MINUTE 
-        WHERE id = {record_id};
-        """
-        mysql(sql)
+        SET create_time = DATE_SUB(NOW(), INTERVAL {d} DAY) + INTERVAL {d*3} MINUTE
+        WHERE id IN ({ids_str});
+    """)
 
-    print("6. 核对造数结果（过去 7 日每天的数量分布）...")
-    res = mysql("SELECT DATE(create_time) AS d, COUNT(*) FROM user_answer_record WHERE user_id=2 GROUP BY DATE(create_time) ORDER BY d DESC;")
-    print("日期\t\t答题数")
-    for line in res.splitlines():
-        print(line.replace("\t", "\t\t"))
+    # 补上 Bitmap 打卡 (B2)
+    # 拼接 stat:checkin:2:yyyyMM
+    ym = target_date.strftime("%Y%m")
+    day_offset = target_date.day - 1
+    redis_key = f"stat:checkin:2:{ym}"
+    subprocess.run(["docker", "exec", "study-redis", "redis-cli", "SETBIT", redis_key, str(day_offset), "1"], capture_output=True)
+    # 补上打卡 Key 的过期时间 (96天)
+    subprocess.run(["docker", "exec", "study-redis", "redis-cli", "EXPIRE", redis_key, "8294400"], capture_output=True)
 
-    print("\n🎉 造数完成！你可以去调用 /api/stat/trend?days=7 查看真实数据了。")
+print("6. 清理 Redis 今日统计缓存（B3，让对账脚本触发自愈）...")
+today_str = today.strftime("%Y%m%d")
+subprocess.run(["docker", "exec", "study-redis", "redis-cli", "DEL", f"stat:answer:2:{today_str}"], capture_output=True)
+
+# 顺手调一下接口触发自动回填
+requests.get(f"{BASE_URL}/api/stat/today", headers=headers)
+
+print("7. 核对造数结果（过去 7 日每天的数量分布）...")
+res = sql_execute("""
+    SELECT DATE(create_time) AS day, COUNT(*) AS total 
+    FROM user_answer_record WHERE user_id = 2 
+    AND create_time >= CURDATE() - INTERVAL 7 DAY 
+    GROUP BY DATE(create_time) ORDER BY day DESC;
+""")
+print("日期          答题数")
+for row in res:
+    print(f"{row[0]}    {row[1]:>4}")
+
+print("🎉 造数完成！")
