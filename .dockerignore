@@ -1,0 +1,14 @@
+# 构建上下文排除项：只让 Maven 需要的东西进镜像
+.git
+.gitignore
+.idea
+*.iml
+**/target
+deploy/mysql-data
+deploy/redis-data
+deploy/rabbitmq-data
+deploy/.env
+docs
+scripts
+*.log
+*.md

@@ -1,18 +1,33 @@
-﻿services:
+# 项目 A 一键起全套：MySQL + Redis + RabbitMQ + app
+#   cd deploy && cp .env.example .env    # 首次：填 DEEPSEEK_API_KEY / JWT_SECRET
+#   docker compose up -d --build
+#   curl http://localhost:8080/v3/api-docs
+# 内存限额按 16GB 机器实测口径设定，见 docs/decisions.md D-40。
+
+services:
   mysql:
     image: mysql:8.0
     container_name: study-mysql
     ports:
       - '3307:3306'
     environment:
-      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
       MYSQL_DATABASE: study_helper
       TZ: Asia/Shanghai
     volumes:
       - ./mysql-data:/var/lib/mysql
-      - ./sql:/docker-entrypoint-initdb.d
+      - ./sql:/docker-entrypoint-initdb.d:ro
     command:
       - --default-time-zone=+8:00
+      - --innodb-buffer-pool-size=256M
+      - --performance-schema=OFF
+    healthcheck:
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    mem_limit: 768m
     restart: unless-stopped
 
   redis:
@@ -20,23 +35,80 @@
     container_name: study-redis
     ports:
       - '6379:6379'
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 200mb --maxmemory-policy allkeys-lru
     volumes:
       - ./redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    mem_limit: 256m
     restart: unless-stopped
 
   rabbitmq:
+    # 国内网络走 daocloud 镜像源；能直连 Docker Hub 的机器可改成 rabbitmq:3.13-management
     image: docker.m.daocloud.io/library/rabbitmq:3.13-management
     container_name: study-rabbitmq
     ports:
-      - '5672:5672'   # AMQP 协议端口，代码连这个
-      - '15672:15672' # 控制台网页端口，浏览器看这个
+      - '5672:5672'    # AMQP 协议端口，代码连这个
+      - '15672:15672'  # 控制台网页端口，浏览器看这个
     environment:
-      RABBITMQ_DEFAULT_USER: study
-      RABBITMQ_DEFAULT_PASS: study123
-
+      RABBITMQ_DEFAULT_USER: ${MQ_USERNAME:-study}
+      RABBITMQ_DEFAULT_PASS: ${MQ_PASSWORD:-study123}
       TZ: Asia/Shanghai
-    mem_limit: 512m
     volumes:
       - ./rabbitmq-data:/var/lib/rabbitmq
+      # RabbitMQ 3.13 起 RABBITMQ_VM_MEMORY_HIGH_WATERMARK 环境变量被废弃（设置了会直接启动失败），
+      # 内存高水位改用配置文件：不设等于没保护，容器会被 OOM 杀掉而不是先掐生产者
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    mem_limit: 512m
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: study-app
+    ports:
+      - '8080:8080'
+    environment:
+      # 容器内走服务名，不是 127.0.0.1
+      DB_URL: jdbc:mysql://mysql:3306/study_helper?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+      DB_USERNAME: root
+      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      MQ_HOST: rabbitmq
+      MQ_PORT: '5672'
+      MQ_USERNAME: ${MQ_USERNAME:-study}
+      MQ_PASSWORD: ${MQ_PASSWORD:-study123}
+      JWT_SECRET: ${JWT_SECRET:-please-change-this-to-a-32-byte-random-string-2026}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # 显式堆上限：Spring Boot 3.5 默认按物理内存 25% 取堆，压测会吃掉整机内存
+      JAVA_TOOL_OPTIONS: '-Xmx512m -XX:MaxMetaspaceSize=192m'
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      # temurin 运行镜像没有 curl/wget；/dev/tcp 只在 bash 里有，/bin/sh(dash) 会报
+      # cannot create /dev/tcp/...，所以必须显式用 bash 探活
+      test: ['CMD-SHELL', 'bash -c "exec 3<>/dev/tcp/127.0.0.1/8080"']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    mem_limit: 768m
     restart: unless-stopped

@@ -5,14 +5,15 @@ spring:
   application:
     name: project-a
   datasource:
-    url: jdbc:mysql://127.0.0.1:3307/study_helper?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
-    username: root
+    # 全部可被环境变量覆盖：容器里指向 mysql 服务名，本地默认走 Docker 映射的 3307
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3307/study_helper?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:root123} # 走环境变量，本地默认 root123
     driver-class-name: com.mysql.cj.jdbc.Driver
   data:
     redis:
-      host: 127.0.0.1
-      port: 6379
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:} # 本地无密码留空
       timeout: 2s # 【W5 新增】Redis 命令执行超时时间，防止 Redis 宕机导致接口长时间阻塞
   threads:
@@ -21,9 +22,9 @@ spring:
 
   # ========== W4 RabbitMQ 配置 ==========
   rabbitmq:
-    host: 127.0.0.1
-    port: 5672
-    username: study
+    host: ${MQ_HOST:127.0.0.1}
+    port: ${MQ_PORT:5672}
+    username: ${MQ_USERNAME:study}
     password: ${MQ_PASSWORD:study123} # 【W5 修复】密码外置，防泄露
     publisher-confirm-type: correlated # 开启确认机制
     publisher-returns: true            # 开启退回机制
@@ -69,9 +70,9 @@ mybatis-plus:
     db-config:
       id-type: auto
 
-# 自定义 JWT 配置
+# 自定义 JWT 配置（W6：密钥外置，容器里由 .env 注入；本地不设则用默认值）
 jwt:
-  secret: please-change-this-to-a-32-byte-random-string-2026
+  secret: ${JWT_SECRET:please-change-this-to-a-32-byte-random-string-2026}
   expire-minutes: 120
 
 # Swagger/Knife4j 配置
