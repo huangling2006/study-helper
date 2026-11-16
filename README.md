@@ -2,7 +2,7 @@
 
 > **一句话定位**：面向学生的刷题与错题管理后端系统。核心基于 Spring Boot 3.5 提供后端工程能力（事务、Redis 缓存三件套、MQ 异步与 AI 降级、统计与 SSE 分段推送），AI 诊断报告作为其中一个业务模块。
 
-**当前进度**：W5 全量闭环与工程债清零（历史报告真分页、SSE 5段对齐、统计口径校验与三路降级）；准备进入 W6 容器化部署与实测。
+**当前进度**：W1–W5 功能闭环，统计口径已统一（错题重练与单题答题共用同一套 afterCommit 埋点，D-37）；4 个集成用例可复跑（`mvn test`，3 个事务失效实验 + 1 个统计口径回归）；容器化就绪，`docker compose up -d --build` 一条命令起 MySQL + Redis + RabbitMQ + app。W6 剩下的只有六组实测数字、演示视频与 v1.0 标签。
 
 ---
 
@@ -29,29 +29,31 @@
       ├── RabbitMQ (报告异步投递 / TTL 重试队列 / DLQ 审计 / Confirm 回调降级)
       └── Spring AI (接入 DeepSeek)
 🚀 快速启动 (Quick Start)
-前提条件：本机已安装 JDK 21、Maven、Docker、Python。
+前提条件：Docker（含 compose 插件）；只在本地跑应用时需要 JDK 21 + Maven + Python。
 
-三步启动：
+方式一：一条命令起全套（推荐，容器里跑 app）
 
-启动基础依赖 (MySQL / Redis / RabbitMQ)
+    cd deploy
+    cp .env.example .env          # 首次：按需填 DEEPSEEK_API_KEY / JWT_SECRET，留空则报告走模板降级
+    docker compose up -d --build
+    curl http://localhost:8080/v3/api-docs     # 200 即就绪；文档 http://localhost:8080/doc.html
 
-bash
-cd deploy
-docker compose up -d
-(注：MySQL 容器映射在宿主机 3307 端口，Redis 映射在 6379 端口，RabbitMQ 映射在 5672/15672)
+四服务与限额：MySQL 3307(容器 3306)、Redis 6379、RabbitMQ 5672/15672、app 8080；
+compose 里已写健康检查与 mem_limit（D-40），app 会等三个中间件 health 后再启动。
 
-导入基础题库数据 (200道题)
-在项目根目录运行 Python 脚本（需先 pip install pymysql）：
+题库数据（200 道）随 MySQL 初始化脚本自动导入；需要重新造数时：
 
-bash
-python scripts/generate_questions_csv.py
-python scripts/import_questions.py
-配置 AI 密钥并启动应用
-在 IDEA 的 Edit Configurations -> Environment variables 中填入：
-DEEPSEEK_API_KEY=sk-你的真实Key
-(注：启动前必须配置，不配会启动失败，属预期。历史版本中曾泄露的旧 key 已轮换)
-在 IDEA 中运行 ProjectAApplication。
-访问接口文档：http://localhost:8080/doc.html
+    python scripts/generate_questions_csv.py
+    python scripts/import_questions.py
+
+方式二：中间件在容器、应用在 IDEA 里跑
+
+    cd deploy && docker compose up -d mysql redis rabbitmq
+    # IDEA 里给 ProjectAApplication 加环境变量 DEEPSEEK_API_KEY；DB_URL 默认已指 127.0.0.1:3307
+
+跑测试（需要 MySQL 3307 + Redis 6379 已启动）：
+
+    mvn test        # 3 个事务失效实验 + 1 个统计口径回归
 
 🛠️ 技术栈
 核心框架：Spring Boot 3.5.5

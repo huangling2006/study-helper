@@ -337,3 +337,38 @@
 
 ## D-36 统计不做预聚合表，写明触发条件
 问题：什么时候算大。候选：① 现在就建 stat_daily 表；② 不建，写清触发条件。选择 ②。触发条件：单用户 >10 万条答题记录，或统计接口 P95 >200ms。验证：benchmark W5 段的三组数字。局限：真到阈值时改造要动答题链路。
+
+## D-37 写库与统计埋点必须同属一个事务边界，错题重练也算「今日答题」
+问题：W5 只给单题答题（AnswerService）埋了 Redis 统计，错题重练（WrongBookService.submitPractice）只写 user_answer_record，两条链路各算各的，对账必然漂。
+候选：① 重练不算今日答题（统计只看单题接口）；② 重练也算，埋点统一放 afterCommit；③ 统计改成实时聚合 MySQL。
+选择 ②。放弃 ①：用户眼里都是「今天做了题」，打卡按接口区分没有任何意义，而且 /stat/trend 读的是 MySQL，会和 /stat/today 自相矛盾。
+放弃 ③：等于放弃 Redis 计数的意义，回到 D-29 已否掉的方案。
+实现：两条链路都在 `TransactionSynchronizationManager.registerSynchronization` 的 afterCommit 里写 Redis，回滚时统计不动。
+验证：PracticeStatConsistencyTest（练 1 题后 Redis t=1 c=0、打卡位置 1、MySQL 1 行），以及 verify_stat.py diff=0。
+
+## D-38 重练结果字段口径：correct = 答对题数，skipped ⊆ correct
+问题：重练时答对了但该题已不在错题本（被手动移除或同批重复提交），原来记 SKIPPED 且不计入 correct，导致 accuracy 偏低（5 题全对可能显示 0）。
+候选：① 保持 skipped 独立、accuracy 只按 MASTERED 算；② correct 按答对数算，skipped 作为 correct 的子集。
+选择 ②。total = correct + wrong，accuracy = correct / total，与单题接口算法一致；前端若要区分「已掌握」看 details[].status。
+局限：skipped 的语义从「答对但未迁移」变成「其中已不在错题本的」，读接口时要按 D-38 解释。
+
+## D-39 集成测试起 RANDOM_PORT 真实 Web 上下文，测试里关掉 MQ 监听
+问题：W2 的事务实验用 `webEnvironment = NONE` 起不来——knife4j 的自动配置要 springdoc 的 `SpringDocConfigProperties`，而 springdoc 只在 Web 上下文创建该 bean，整类测试直接 ApplicationContext 加载失败（Tests run: 2, Errors: 2）。
+候选：① 测试里排除 knife4j 自动配置；② 起 Web 上下文（RANDOM_PORT）；③ 不用 Spring 上下文，纯 JDBC 手写事务。
+选择 ②。放弃 ①：要维护一长串 exclude，且掩盖「真实启动能不能跑」这件事；放弃 ③：测不到代理行为，等于没测事务失效。
+配套：`spring.rabbitmq.listener.simple.auto-startup=false`（不依赖 broker）、占位 api-key（不依赖真实 AI key）。
+代价：测试依赖本机 MySQL/Redis（3307/6379），不是纯离线单测，CI 里要带 compose。
+
+## D-40 一条命令起四服务：健康检查 + mem_limit + .env
+问题：W6 的 DoD 是「新机器 clone → compose up → doc.html 能打开」，原来 compose 只有三个中间件、没有限额也没有健康检查。
+选择：四个服务都写 healthcheck；app 用 `depends_on: condition: service_healthy` 等三个中间件就绪；限额按 16GB 机器实测口径——mysql 768m（buffer pool 256M、关 performance_schema）、redis 256m（maxmemory 200mb + allkeys-lru）、rabbitmq 512m（内存高水位 0.4）、app 768m（-Xmx512m、MaxMetaspace 192m）。
+理由：不设内存高水位等于没保护。注意 RabbitMQ 3.13 起 `RABBITMQ_VM_MEMORY_HIGH_WATERMARK` 环境变量已被判定为 deprecated，设置了会直接启动失败——必须走 `deploy/rabbitmq.conf` 的 `vm_memory_high_watermark.relative = 0.4`。同样，redis 的启动参数只能用字符串形式（`command: redis-server --appendonly yes --maxmemory 200mb ...`），写成 YAML 列表会被 entrypoint 当成配置文件解析而启动失败。
+不给 app 设堆上限时 Spring Boot 3.5 按物理内存 25% 取堆，压测那周会吃掉整机内存。
+密码与密钥走 deploy/.env（.gitignore 忽略），仓库里只留 .env.example。
+验证：`docker compose up -d mysql redis rabbitmq` 后三容器 status=healthy、`docker inspect` 的 HostConfig.Memory 分别为 768/256/512MB、`CONFIG GET maxmemory`=209715200、`rabbitmq-diagnostics environment` 里 vm_memory_high_watermark=0.4。
+
+## D-41 DB / Redis / MQ / JWT 全部走环境变量，密钥不进仓库
+问题：W4 只外置了 AI key 和 DB/MQ 密码，JWT secret 还是写死的 32 字节字符串，泄露即可伪造任意用户 token。
+选择：五类配置全部 `${VAR:默认值}`，容器里由 compose 注入，本地不设时用默认值保证能跑。
+代价：默认值仍在代码里（本地开发便利），部署时必须改；README 与 .env.example 里都写了生成命令。
+遗留：历史提交里仍有旧的明文 DeepSeek key（6d0c677 之前），已轮换，若要彻底清历史需 git filter-repo 重写。
