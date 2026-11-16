@@ -13,7 +13,22 @@ import org.springframework.transaction.annotation.Transactional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+/**
+ * W2 验收：亲手复现三种事务失效（内部调用 / 非 public / 吞异常）。
+ *
+ * 运行前提：MySQL(3307)、Redis(6379) 已启动；MQ 监听在测试环境关闭，不参与。
+ * 用 RANDOM_PORT 起真实 Web 上下文：knife4j 的自动配置依赖 springdoc 的
+ * SpringDocConfigProperties（只在 Web 上下文里创建），用 WebEnvironment.NONE
+ * 会直接 ApplicationContext 加载失败。
+ */
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {
+                // 测试不依赖 MQ：关掉监听容器，避免 broker 没起就整类失败
+                "spring.rabbitmq.listener.simple.auto-startup=false",
+                // 测试不会真的调 AI，给个占位 key 防止空值校验
+                "spring.ai.deepseek.api-key=test-placeholder-key"
+        })
 @Import(TransactionFailureLabTest.TxLabService.class)
 class TransactionFailureLabTest {
 
@@ -45,6 +60,32 @@ class TransactionFailureLabTest {
                 beforeRecord, afterRecord, beforeWrong, afterWrong);
 
         // 预期：因为绕过了代理，事务没生效，数据已经插进去了（after = before + 1）
+        assertEquals(beforeRecord + 1, afterRecord);
+        assertEquals(beforeWrong + 1, afterWrong);
+
+        clean(userId, questionId);
+    }
+
+    // 实验B：@Transactional 标在非 public 方法上，代理根本不会拦截
+    @Test
+    void experimentB_nonPublicMethod_shouldNotRollback() {
+        long userId = firstUserId();
+        long questionId = firstQuestionId();
+        clean(userId, questionId);
+
+        long beforeRecord = count("user_answer_record");
+        long beforeWrong = count("wrong_book");
+
+        assertThrows(RuntimeException.class,
+                () -> service.nonPublicOuter(userId, questionId));
+
+        long afterRecord = count("user_answer_record");
+        long afterWrong = count("wrong_book");
+
+        log.info("实验B结果 beforeRecord={}, afterRecord={}, beforeWrong={}, afterWrong={}",
+                beforeRecord, afterRecord, beforeWrong, afterWrong);
+
+        // 预期：private 方法无法被 CGLIB 子类覆盖，注解形同虚设，异常抛出但数据留下
         assertEquals(beforeRecord + 1, afterRecord);
         assertEquals(beforeWrong + 1, afterWrong);
 
@@ -109,6 +150,17 @@ class TransactionFailureLabTest {
         public void selfInvocationInner(Long userId, Long questionId) {
             insertAnswerAndWrong(userId, questionId);
             throw new RuntimeException("实验A: 内部调用不回滚测试");
+        }
+
+        public void nonPublicOuter(Long userId, Long questionId) {
+            // 实验B：private 方法不在代理的拦截范围内，事务边界根本没建立
+            this.nonPublicInner(userId, questionId);
+        }
+
+        @Transactional(rollbackFor = Exception.class)
+        private void nonPublicInner(Long userId, Long questionId) {
+            insertAnswerAndWrong(userId, questionId);
+            throw new RuntimeException("实验B: 非 public 方法事务不生效测试");
         }
 
         @Transactional(rollbackFor = Exception.class)

@@ -11,6 +11,8 @@ import com.hl.study.common.ErrorCode;
 import com.hl.study.question.entity.Question;
 import com.hl.study.question.mapper.QuestionMapper;
 import com.hl.study.question.vo.QuestionListVO;
+import com.hl.study.stat.service.CheckinBitmap;
+import com.hl.study.stat.service.DailyStatCounter;
 import com.hl.study.wrong.dto.PracticeAnswerDTO;
 import com.hl.study.wrong.dto.PracticeQueryDTO;
 import com.hl.study.wrong.dto.PracticeSubmitDTO;
@@ -20,10 +22,13 @@ import com.hl.study.wrong.vo.*;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -41,6 +46,13 @@ public class WrongBookService {
 
     @Resource
     private RedisCacheService redisCacheService;
+
+    // 重练也要计入「今日答题」与「连续打卡」，与 AnswerService 共用同一套 Redis 统计组件
+    @Resource
+    private DailyStatCounter dailyStatCounter;
+
+    @Resource
+    private CheckinBitmap checkinBitmap;
 
     /**
      * 错题分页列表
@@ -97,18 +109,25 @@ public class WrongBookService {
 
     /**
      * 提交练习（事务核心）
+     *
+     * 口径（见 decisions.md D-37/D-38）：
+     * 1. 错题重练同样算「今日答题」，写库与 Redis 统计都走 afterCommit，两条链路一套口径；
+     * 2. correct = 答对题数（含 SKIPPED），skipped ⊆ correct，因此 total = correct + wrong，
+     *    accuracy = correct / total，与单题提交接口的算法一致。
      */
     @Transactional(rollbackFor = Exception.class)
     public PracticeResultVO submitPractice(Long userId, PracticeSubmitDTO dto) {
-        int correct = 0, wrong = 0, skipped = 0;
+        int right = 0, wrong = 0, skipped = 0;
         List<PracticeItemVO> details = new ArrayList<>();
+        // 与每道题一一对应的判分结果，提交后用于 Redis 埋点
+        List<Boolean> correctFlags = new ArrayList<>();
 
         for (PracticeAnswerDTO a : dto.getAnswers()) {
             Question q = questionMapper.selectById(a.getQuestionId());
             if (q == null) throw new BusinessException(ErrorCode.NOT_FOUND);
 
             String userAnswer = a.getUserAnswer().trim().toUpperCase();
-            boolean isCorrect = q.getAnswer().equals(userAnswer);
+            boolean isCorrect = q.getAnswer().equalsIgnoreCase(userAnswer);
 
             // 1. 历史留痕
             UserAnswerRecord record = new UserAnswerRecord();
@@ -117,17 +136,19 @@ public class WrongBookService {
             record.setUserAnswer(userAnswer);
             record.setIsCorrect(isCorrect ? 1 : 0);
             answerRecordMapper.insert(record);
+            correctFlags.add(isCorrect);
 
             // 2. 错题状态迁移
             String status;
             if (isCorrect) {
+                right++;
                 int deleted = wrongBookMapper.deleteByUserAndQuestion(userId, q.getId());
                 if (deleted == 0) {
+                    // 答对了，但该题已不在错题本（被手动移除或同一批重复提交）
                     status = "SKIPPED";
                     skipped++;
                 } else {
                     status = "MASTERED";
-                    correct++;
                 }
             } else {
                 wrongBookMapper.upsertWrongBook(userId, q.getId());
@@ -138,15 +159,30 @@ public class WrongBookService {
         }
 
         // 3. 只要有状态迁移，就删缓存（挂在事务提交后执行，防脏数据回填）
-        if (correct > 0 || wrong > 0) {
+        if (right > 0 || wrong > 0) {
             redisCacheService.deleteAfterCommit(CacheKeys.WRONG_HOT_TOP100);
+        }
+
+        // 4. W6 修复：统计埋点。与 AnswerService 一致，只在事务真正提交后写 Redis，
+        //    否则回滚了统计却涨了，对账永远对不上。
+        if (!correctFlags.isEmpty()) {
+            List<Boolean> flags = List.copyOf(correctFlags);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    for (Boolean ok : flags) {
+                        dailyStatCounter.incrQuietly(userId, ok);
+                    }
+                    checkinBitmap.markQuietly(userId, LocalDate.now());
+                }
+            });
         }
 
         int total = dto.getAnswers().size();
         BigDecimal accuracy = total == 0 ? BigDecimal.ZERO :
-                BigDecimal.valueOf(correct).divide(BigDecimal.valueOf(total), 4, RoundingMode.HALF_UP);
+                BigDecimal.valueOf(right).divide(BigDecimal.valueOf(total), 4, RoundingMode.HALF_UP);
 
-        return new PracticeResultVO(total, correct, wrong, skipped, accuracy, details);
+        return new PracticeResultVO(total, right, wrong, skipped, accuracy, details);
     }
 
     /**
