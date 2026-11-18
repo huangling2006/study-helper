@@ -1,9 +1,3 @@
-# 项目 A 一键起全套：MySQL + Redis + RabbitMQ + app
-#   cd deploy && cp .env.example .env    # 首次：填 DEEPSEEK_API_KEY / JWT_SECRET
-#   docker compose up -d --build
-#   curl http://localhost:8080/v3/api-docs
-# 内存限额按 16GB 机器实测口径设定，见 docs/decisions.md D-40。
-
 services:
   mysql:
     image: mysql:8.0
@@ -15,7 +9,7 @@ services:
       MYSQL_DATABASE: study_helper
       TZ: Asia/Shanghai
     volumes:
-      - ./mysql-data:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
       - ./sql:/docker-entrypoint-initdb.d:ro
     command:
       - --default-time-zone=+8:00
@@ -37,7 +31,7 @@ services:
       - '6379:6379'
     command: redis-server --appendonly yes --maxmemory 200mb --maxmemory-policy allkeys-lru
     volumes:
-      - ./redis-data:/data
+      - redis-data:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
@@ -59,7 +53,7 @@ services:
       RABBITMQ_DEFAULT_PASS: ${MQ_PASSWORD:-study123}
       TZ: Asia/Shanghai
     volumes:
-      - ./rabbitmq-data:/var/lib/rabbitmq
+      - rabbitmq-data:/var/lib/rabbitmq
       # RabbitMQ 3.13 起 RABBITMQ_VM_MEMORY_HIGH_WATERMARK 环境变量被废弃（设置了会直接启动失败），
       # 内存高水位改用配置文件：不设等于没保护，容器会被 OOM 杀掉而不是先掐生产者
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
@@ -76,6 +70,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+    # 固定镜像 tag：不写 image 时 compose 会用 "<目录名>-<服务名>:latest"（这里是 deploy-app:latest），
+    # 换台机器/换个目录名 tag 就变，benchmark 和 tag v1.0 对不上
+    image: study-helper/app:v1.0
     container_name: study-app
     ports:
       - '8080:8080'
@@ -112,3 +109,16 @@ services:
       start_period: 60s
     mem_limit: 768m
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  mysql-data:
+    name: study-mysql-data
+  redis-data:
+    name: study-redis-data
+  rabbitmq-data:
+    name: study-rabbitmq-data
