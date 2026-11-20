@@ -1,50 +1,45 @@
 # W6 进度接续笔记
 
-最后更新：2026-11-18 晚（W6 步骤 1–2 完成）
+最后更新：2026-11-20 晚（六组实测完成、文档重写完成）
 
 ## 一句话现状
 
-W6 第零节（W5 收尾复跑 18 项）已于 2026-11-16 完成；2026-11-18 完成部署基线（命名卷空库重建、镜像 tag 固定、演示造数脚本）。
-下一步：**步骤 3 —— scripts/w6 下五个压测脚本** → 组 1–6 实测 → README/decisions/证据 → 演示视频 → tag v1.0。
+W6 第零节（W5 收尾复跑 18 项）2026-11-16 完成；部署基线 2026-11-18 完成；**2026-11-20 晚完成六组实测、M9 收尾、README 六块、decisions D-42–D-50**。
+剩下：14 条验收里的 3 / 4 / 7 / 9 / 11 / 12 逐条补证、截图 6 张、演示视频、tag v1.0、六个 commit。
 
 ## 已完成（均实测）
 
-- 验收第 2 条：命名卷空库重建，question=200（Java 120 / MySQL 40 / Redis 40），ai_report=0，四容器 healthy
-- 验收第 9 条材料：镜像 study-helper/app:v1.0，IMAGE ID 5019e47a631d；docker images 684MB / 磁盘 224MB；
-  构成 = 基础镜像 eclipse-temurin:21-jre 462MB + app.jar 59.5MB；运行用户 app（uid=999）
-- 验收第 10 条材料：JAVA_TOOL_OPTIONS=-Xmx512m -XX:MaxMetaspaceSize=192m（jcmd VM.flags / docker stats 待补）
-- scripts/csv_to_sql.py → deploy/sql/06_seed_questions.sql（200 题，2 条 INSERT IGNORE）
-- scripts/seed_demo.py：走接口造 6 题（错 4 对 2）。实测 todayTotal=6 todayCorrect=2 accuracy=0.3333 streak=1；
-  Redis stat:answer:1:20261118 t=6 c=2；GETBIT stat:checkin:1:202611 17 = 1；user_answer_record 6 行 / wrong_book 4 行
-- docs/evidence/w6-deploy-evidence.md 已写第 1–3 段
-- 本地 main 与 origin/main、gitee/main 已同步
+- 验收第 1、2 条：命名卷空库重建，question=200（Java 120 / MySQL 40 / Redis 40），ai_report=0，四容器 healthy
+- 验收第 5、6 条：status=1 报告 `10a26650b38149f3815277643bf8829a`（deepseek-chat，tokenCost 841）；status=2 报告 `b2842a29b9704d61b139063ede4894d2`（template-v1，error_msg 401）
+- 验收第 9 条：镜像 study-helper/app:v1.0，M9 重建后 IMAGE ID **9511e97bb973**，684MB / 磁盘 224MB，运行用户 app（uid=999）
+- 验收第 10 条：`java -XX:+PrintFlagsFinal` → MaxHeapSize=536870912、MaxMetaspaceSize=201326592（jcmd 不在 JRE 镜像里，用不了）
+- scripts/w6 五个脚本全部落盘并实跑：env_snapshot.sh / bench_http.py / bench_cache_hit.sh / bench_index.sh / bench_mq_reliability.sh
+- 组 1 RT/P95、组 2 QPS 拐点、组 3 缓存命中率、组 4 索引收益、组 5 事务正确性、组 6 MQ 五场景 —— 数字见 docs/benchmark.md W6 段与 docs/evidence/w6-measurements-raw.md
+- 组 5：新增 `TransactionRollbackIT`（正常提交 / 事务内异常回滚 / 调用方吞异常仍提交），`mvn test` 共 7 个用例全绿
+- M9 收尾：`spring.data.redis.timeout=500ms` + StatService 30 秒本地短路；停 Redis 后 /api/stat/today 从 8.09s 降到 1.03s（首次）/ 0.52s（后续），接口始终 200
+- README 按六块重写；docs/decisions.md 补 D-42–D-50；docs/demo-w6.md 八步演示脚本；.gitattributes 锁 LF
 
 ## 已定口径（不要重新讨论）
 
-1. 数据目录用命名卷 study-mysql-data / study-redis-data / study-rabbitmq-data。
-   绑定挂载时 `docker compose down -v` 删不掉目录，会假通过；旧 ./xxx-data 已移到 D:\Projects\_backup-w6\。
-2. 镜像 tag 固定为 study-helper/app:v1.0。原先 app 服务没写 image:，tag 由目录名拼成 deploy-app:latest。
-3. .dockerignore 必须放仓库根（构建 context 是 ..，deploy/.dockerignore 不生效）。
-4. 8080 同一时刻只能有一个主人：写代码用 IDEA，压测与录视频用容器 study-app。
-5. scripts/ 下一律用 `py -3.9`（D:\cxdownload\python.exe，有 pymysql/requests）；默认 python 3.14 没有。
-6. 从聊天窗口复制长代码会被吃掉 `__` 和 `*`：用 Ctrl+Shift+V 纯文本粘贴，或分段给。
-7. 组 5 事务测试用固定临时用户 test_tx_999999，不额外建测试库。
-8. 压测口径：自研 Python 脚本（标准库 http.client），单机客户端，QPS 只代表单实例下限，不冒充 JMeter。
+1. 数据目录用命名卷；**镜像重建后 tag 不变、IMAGE ID 会变**，证据里要写新 ID
+2. 缓存命中率主口径 = `keyspace_misses`（miss 只来自缓存 key）；全口径 hits 只作对照；MySQL Com_select 有每 3 秒一次背景 SELECT，不能当回源数
+3. 索引实验在影子表 `question_idx_test` 上做，**必须同时跑 COUNT 版本**，分页版本会走 PRIMARY，看不出差别
+4. 组 6 S2 的标记表必须是 **MyISAM**：InnoDB 表在触发器里的写会随 SIGNAL 一起回滚，计数器永远减不动；次数取 4（3 次重试 + 第 4 次投递），第 5 次 fallback 才写成功
+5. 组 6 S5 要**先停消费者**再投 300 条，否则消费比投递快，队列永远积压不起来
+6. 组 6 每个场景换账号绕开 60 秒限流；S1 之后必须 `docker restart study-app`，否则 broker 恢复后连接不重建，后面全走本地降级
+7. scripts/ 一律 `py -3.9`；压测期间不许重复登录（单端登录会踢掉之前的 token）
 
 ## 待办
 
-1. deploy/.env 换有效 DEEPSEEK_API_KEY → `docker compose up -d app` → 重跑 seed_demo.py 拿到 **status=1** 的报告（演示第 5 步）；
-   今晚那份 status=2 的保留，正好当演示第 7 步的降级对照。
-2. 步骤 3：scripts/w6 五个脚本
-   env_snapshot.sh / bench_http.py / bench_cache_hit.sh / bench_index.sh / bench_mq_reliability.sh
-3. 组 1–6 实测（组 1 RT/P95、组 2 QPS 拐点、组 3 缓存命中率、组 4 索引收益、组 5 事务正确性、组 6 MQ 五场景）
-   → docs/benchmark.md 的 W6 段、evidence 第 4–6 段、截图 6 张
-4. M9 残留：Redis 宕机时 /stat/today 单次 8s → 失败后本地短路，目标 < 2s
-5. README 六块重写、decisions D-42–D-49、3 分钟演示视频（8 步）、14 条验收逐条、tag v1.0 双远端
+1. 验收 3（doc.html 六分组）、4（新用户刷 3 题 → 错题 2 条 + HGETALL t=3 c=1 + 打卡位）、7（SSE 五段）、9（Config.User / id）、11（traceId 与 X-Trace-Id）、12（换目录验证）
+2. 截图 6 张：四容器 healthy、镜像行、doc.html 分组、benchmark 段、SSE 五段、DLQ 队列
+3. 3 分钟演示视频（docs/demo-w6.md，8 步，第 5 步 status=1、第 7 步 status=2）
+4. 按六条粒度分 6 个 commit（脚本 / 事务测试 / M9 / benchmark+evidence / README+decisions / demo）
+5. tag v1.0 双远端 + release notes
 
 ## 已知卡点
 
-- 报告目前 status=2（DEEPSEEK key 无效或未填），演示第 5 步需要一份 status=1 的
-- 宿主机 IDEA 进程与 study-app 抢 8080，压测前务必先停 IDE
+- 宿主机 IDEA 进程与 study-app 抢 8080，压测前先停 IDE
 - git 历史 6d0c677 之前有旧 DeepSeek key（已轮换失效）；彻底清需 git filter-repo，留到 W10
-- gitee 走 HTTPS（每次 push 可能要求账号），origin 走 SSH（已验证可用）
+- gitee 走 HTTPS（每次 push 可能要账号），origin 走 SSH
+- 报告限流 60 秒：录制演示时第 5 步与第 7 步不要连在一起触发
