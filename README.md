@@ -1,183 +1,146 @@
 # 💊 智能学情诊断学习助手 (Study Helper)
 
-> **一句话定位**：面向学生的刷题与错题管理后端系统。核心基于 Spring Boot 3.5 提供后端工程能力（事务、Redis 缓存三件套、MQ 异步与 AI 降级、统计与 SSE 分段推送），AI 诊断报告作为其中一个业务模块。
+> **一句话定位**：面向学生的刷题与错题管理后端，重点不在业务 CRUD，而在把一条真实链路做扎实——答题事务与错题归集、Redis 缓存三件套、MQ 异步 + AI 三层降级、统计口径与对账、一键容器化与六组实测。
 
-**当前进度**：W1–W5 功能闭环，统计口径已统一（错题重练与单题答题共用同一套 afterCommit 埋点，D-37）；4 个集成用例可复跑（`mvn test`，3 个事务失效实验 + 1 个统计口径回归）；容器化就绪，`docker compose up -d --build` 一条命令起 MySQL + Redis + RabbitMQ + app。W6 剩下的只有六组实测数字、演示视频与 v1.0 标签。
+**当前状态**：项目 A v1.0（W1–W6）。本地 `mvn test` 7 个用例全绿（3 个事务失效实验 + 3 个事务原子性断言 + 1 个统计口径回归）；`docker compose up -d` 一条命令起 MySQL / Redis / RabbitMQ / 应用四服务，空卷自动建表并灌 200 题；六组实测数字见 `docs/benchmark.md` 的 W6 段。
 
 ---
 
-## 🏗️ 架构图
+## 1. 架构与数据流
 
 ```text
-[前端/客户端]
-     │
-     ▼
-[Spring Boot 3.5 应用]
- ├── Interceptor / JWT 拦截鉴权 (Redis 宕机自动降级为纯 JWT 验签)
- ├── 统一返回体 R<T> / 全局异常处理 (含 400 参数越界) / TraceId 链路追踪
- ├── 业务层 (Controller / Service)
- │    ├── 用户模块 (注册/登录/登出)
- │    ├── 题库模块 (分页/筛选)
- │    ├── 答题模块 (判分/事务归集/Redis 统计)
- │    ├── 错题本模块 (分页/重练/高频 Top100)
- │    ├── 统计概览模块 (今日/科目/趋势/连续打卡)
- │    └── AI 学情报告 (MQ 异步 + Spring AI + 三层降级 + SSE 分段推送)
- ├── 持久层 (MyBatis-Plus)
- └── 中间件交互
-      ├── MySQL (主业务数据存储)
-      ├── Redis (Token 存储 / 缓存三件套 / 限流 / 每日 HASH 计数 / Bitmap 打卡 / SSE List)
-      ├── RabbitMQ (报告异步投递 / TTL 重试队列 / DLQ 审计 / Confirm 回调降级)
-      └── Spring AI (接入 DeepSeek)
-🚀 快速启动 (Quick Start)
-前提条件：Docker（含 compose 插件）；只在本地跑应用时需要 JDK 21 + Maven + Python。
+                       ┌────────────────┐
+  客户端 / curl ──────▶ │ Spring Boot 3.5 │ 8080
+                       └───────┬────────┘
+        ┌──────────────┬───────┴────────┬────────────────┐
+        ▼              ▼                ▼                ▼
+   MySQL 8.0       Redis 7.2        RabbitMQ 3.13    DeepSeek API
+  业务主数据       token 校验        报告异步投递       AI 诊断报告
+  答题记录/错题    Top100 缓存        TTL 重试队列       （失败降级模板）
+  报告/统计聚合    每日 HASH 计数      DLQ 审计
+                   打卡 Bitmap
+                   SSE 分段 List
+```
 
-方式一：一条命令起全套（推荐，容器里跑 app）
+四条链路各自的可观测点：
 
-    cd deploy
-    cp .env.example .env          # 首次：按需填 DEEPSEEK_API_KEY / JWT_SECRET，留空则报告走模板降级
-    docker compose up -d --build
-    curl http://localhost:8080/v3/api-docs     # 200 即就绪；文档 http://localhost:8080/doc.html
+- **答题**：`POST /api/answer/submit` → 事务内写 `user_answer_record` + 错题 upsert → `afterCommit` 写 Redis 日计数与打卡位。
+- **报告**：`POST /api/report/generate` → 落 `ai_report(status=0)` → 投 MQ → 消费者聚合 4 条 SQL → 调 DeepSeek → 条件更新 `status=1`；失败按三层降级落到 `status=2`。
+- **统计**：`/api/stat/*` 读 Redis（HASH / Bitmap），Redis 不可用时降级查 MySQL 并回填。
+- **流式**：报告落库后拆 5 段推 Redis List，`/api/report/stream/{requestId}` 分段回放。
 
-四服务与限额：MySQL 3307(容器 3306)、Redis 6379、RabbitMQ 5672/15672、app 8080；
-compose 里已写健康检查与 mem_limit（D-40），app 会等三个中间件 health 后再启动。
+## 2. 启动（三步）
 
-题库数据（200 道）随 MySQL 初始化脚本自动导入；需要重新造数时：
+```bash
+git clone <repo> && cd study-helper/deploy
+cp .env.example .env          # 填 DEEPSEEK_API_KEY；不填也能跑，报告走模板降级 status=2
+docker compose up -d          # 首次会自动构建镜像，四个服务按健康检查顺序起来
+```
 
-    python scripts/generate_questions_csv.py
-    python scripts/import_questions.py
+就绪判断：`curl http://localhost:8080/v3/api-docs` 返回 200，接口文档 `http://localhost:8080/doc.html`。
 
-方式二：中间件在容器、应用在 IDEA 里跑
+- 端口：app 8080、MySQL 3307（容器 3306）、Redis 6379、RabbitMQ 5672 / 控制台 15672。
+- 空卷时 initdb 自动建 5 张表并灌 200 题（Java 120 / MySQL 40 / Redis 40）；改了种子 SQL 必须 `docker compose down -v` 再起。
+- 宿主机跑应用（IDEA）时：`docker compose up -d mysql redis rabbitmq`，DB 默认已指 `127.0.0.1:3307`。
+- 跑测试：`mvn test`（需 MySQL 3307 + Redis 6379 已启动）；脚本一律用 `py -3.9`（本机 3.14 没有 pymysql）。
 
-    cd deploy && docker compose up -d mysql redis rabbitmq
-    # IDEA 里给 ProjectAApplication 加环境变量 DEEPSEEK_API_KEY；DB_URL 默认已指 127.0.0.1:3307
+## 3. 接口与错误码
 
-跑测试（需要 MySQL 3307 + Redis 6379 已启动）：
+| 模块 | 方法 | 路径 | 说明 |
+|---|---|---|---|
+| 用户 | POST | /api/user/register | 注册，BCrypt，用户名唯一索引防并发重名 |
+| 用户 | POST | /api/user/login | 登录，签发 JWT 并写 Redis（单端登录） |
+| 用户 | POST | /api/user/logout | 删 Redis token 即踢下线 |
+| 题库 | GET | /api/question/list | 分页筛选，VO 脱敏不带 answer |
+| 题库 | GET | /api/question/{id} | 详情，Cache-Aside + 空值缓存 |
+| 答题 | POST | /api/answer/submit | 事务判分 + 错题归集 + afterCommit 埋点 |
+| 错题 | GET | /api/wrong/list | 分页，SQL 必带 user_id |
+| 错题 | DELETE | /api/wrong/{id} | 越权统一 404 |
+| 错题 | GET | /api/wrong/practice | 随机抽题重练 |
+| 错题 | POST | /api/wrong/practice/submit | 重练提交，与单题共用统计口径（D-37） |
+| 错题 | GET | /api/wrong/hot | Top100 榜单（Redis 缓存） |
+| 报告 | POST | /api/report/generate | 触发异步生成，60 秒限流 |
+| 报告 | GET | /api/report/{requestId} | 查状态与内容 |
+| 报告 | GET | /api/report/history | 历史列表，真分页 |
+| 报告 | GET | /api/report/stream/{requestId} | SSE 五段回放 |
+| 统计 | GET | /api/stat/today | 今日概览 + 连续打卡 |
+| 统计 | GET | /api/stat/subject | 近 30 天科目分布 |
+| 统计 | GET | /api/stat/trend?days=N | 近 N 日趋势，缺失补零 |
 
-    mvn test        # 3 个事务失效实验 + 1 个统计口径回归
+HTTP 语义码（`body.status` 与之一致）与业务码分开：
 
-🛠️ 技术栈
-核心框架：Spring Boot 3.5.5
+| HTTP | body.code | 场景 |
+|---|---|---|
+| 200 | 200 | 成功 |
+| 400 | 400 | 参数校验失败（含 size>20 / days>30 越界） |
+| 401 | 401 | 未登录或 token 失效 |
+| 404 | 404 | 资源不存在或越权（不暴露存在性） |
+| 429 | 429 | 生成报告触发 60 秒限流 |
+| 500 | 500 | 未预期异常 |
+| 200 | 1001 | 用户名已存在 |
+| 200 | 1003 | 用户名或密码错误（防账号枚举） |
 
-运行环境：JDK 21 (已开启虚拟线程配置)
+## 4. 关键设计（详见 docs/decisions.md）
 
-数据库：MySQL 8.0 (InnoDB，显式联合索引设计)
+**事务与幂等**：判分、写记录、错题 upsert 同属一个 `@Transactional` 边界，异常即整体回滚；错题归集靠 `uk_user_question` 唯一索引 `ON DUPLICATE KEY UPDATE`，不做先查后插。三种事务失效（同类内部调用 / 非 public / 异常被吞）由测试钉住，事务原子性由 `TransactionRollbackIT` 三个方法断言（D-47）。
 
-缓存：Redis 7.2 (Spring Data Redis，包含 Lua 脚本)
+**缓存三件套**：穿透写 `__NULL__` 哨兵、击穿用 `SET NX EX` 抢锁双检、雪崩给 TTL ±20% 抖动；写库后 `afterCommit` 删缓存，Top100 额外延迟双删。命中率口径用 `keyspace_misses` 而不是累计 hits——token 校验每次请求都 GET 一次 Redis，全口径命中率必然虚高（D-46）。
 
-消息队列：RabbitMQ 3.13 (含 DLX、TTL、死信队列)
+**异步与降级**：报告投递走主队列 + 15 秒 TTL 重试队列 + DLQ 审计；消费异常最多重试 3 次，之后写模板报告 `status=2` 并投审计消息进 DLQ。AI 侧三层降级（重试 → 模板 → 兜底），任何情况下接口不返回 5xx；投递失败用 Confirm 回调本地降级，不留 status=0 僵尸数据（D-45）。
 
-ORM：MyBatis-Plus 3.5.17
+**统计口径**：日计数用 HASH + Lua 保证自增与过期原子性，TTL 定在次日 02:00；打卡用 Bitmap 一次 `BITFIELD` 读整月。单题答题与错题重练共用同一套 `afterCommit` 埋点（D-37），Redis 故障时降级查 MySQL 并回填，同时在 30 秒窗口内本地短路，避免每条请求都等一次超时（D-50、D-31）。
 
-AI 框架：Spring AI 1.1.8 (DeepSeek 模型)
+## 5. 已知未做项
 
-鉴权：JWT (jjwt 0.12.x) + 拦截器 + Redis 主动失效 + BCrypt 密码加密
+- 批量提交试卷、管理端题目导入后台：不做（P1/P2）。
+- SSE 是**分段回放**（报告落库后拆 5 段推 Redis List），不是 token 级真流式——结构化 JSON 需要完整解析，这一点主动说明。
+- 统计未建预聚合表：触发条件是单用户 >10 万条答题记录或统计接口 P95 >200ms。
+- 无 Nginx / HTTPS / CI / Prometheus：单实例直连足够演示，可观测性用 actuator + traceId 讲（D-49）。
+- 限流是固定 60 秒窗口，边界会放过双倍流量；令牌桶留给项目 B。
+- 历史提交里仍有旧的明文 DeepSeek key（已轮换失效），彻底清理需 `git filter-repo`，留到收尾阶段。
 
-接口文档：Knife4j (OpenAPI 3)
+## 6. 演示与实测摘要
 
-工程规范：统一返回体、全局异常、MDC TraceId 链路追踪
+八步演示脚本（完整版与每步期望输出见 `docs/demo-w6.md`）：
 
-📡 接口列表与错误码
-已实现接口 (W1 ~ W5)
+```bash
+# 1 一条命令起全套
+cd deploy && docker compose up -d && docker ps          # 四行 healthy
 
-方法	路径	说明
-POST	/api/user/register	注册，密码 BCrypt 加密入库
-POST	/api/user/login	登录，签发 JWT，写入 Redis
-POST	/api/user/logout	登出，删除 Redis Token 实现主动失效
-GET	/api/user/info	获取当前用户信息
-PUT	/api/user/info	修改个人信息 (如昵称)
-GET	/api/question/list	题目分页筛选 (VO 脱敏，不泄露答案)
-GET	/api/question/{id}	题目详情 (接入 Redis 缓存防穿透)
-POST	/api/answer/submit	提交答题，事务判分并归集错题，afterCommit 写 Redis 统计
-GET	/api/wrong/list	错题分页列表 (支持科目、错次、时间排序)
-DELETE	/api/wrong/{id}	手动移除错题 (越权防护，返回 404)
-GET	/api/wrong/practice	从错题本随机抽题重练
-POST	/api/wrong/practice/submit	提交重练，答对移出错题本，答错计数+1
-GET	/api/wrong/hot	高频错题 Top100 榜单 (Cache-Aside 缓存)
-POST	/api/report/generate	触发 AI 学情报告 (MQ 异步，60s 限流，投递失败自动本地降级)
-GET	/api/report/{requestId}	查询报告状态与结果 (包含三层降级兜底)
-GET	/api/report/history	历史报告列表 (真分页，JSON 函数算摘要，不带大字段)
-GET	/api/report/stream/{requestId}	SSE 分段推送报告 (基于 Redis List 实现，需 fetch 流式解析)
-GET	/api/stat/today	今日统计与连续打卡 (Redis 优先，宕机降级查库)
-GET	/api/stat/subject	科目正确率分布 (近 30 天，含 accuracy 字段)
-GET	/api/stat/trend	近 N 日答题趋势 (缺失日期自动补零)
-统一错误码 (部分)
+# 2 注册 + 登录
+curl -s -X POST localhost:8080/api/user/register -H 'Content-Type: application/json' -d '{"username":"demo","password":"demo12345"}'
+TOKEN=$(curl -s -X POST localhost:8080/api/user/login -H 'Content-Type: application/json' -d '{"username":"demo","password":"demo12345"}' | py -3.9 -c "import sys,json;print(json.load(sys.stdin)['data']['token'])")
 
-HTTP 状态码	body 业务码 (code)	说明
-200	200	请求成功
-400	400	参数校验失败 (DTO 校验 / @Max 等约束越界拦截)
-401	401	未登录或 Token 失效 (UNAUTHORIZED)
-404	404	资源不存在或越权访问 (NOT_FOUND)
-429	429	操作过于频繁 (触发限流)
-500	500	系统内部异常
--	1001	用户名已存在 (USER_NAME_EXIST)
--	1003	用户名或密码错误 (防账号枚举)
-💡 关键设计与排坑记录
-更详细的技术取舍请查阅 docs/decisions.md 与 docs/benchmark.md。
+# 3 刷题（错题自动归集）
+curl -s -X POST localhost:8080/api/answer/submit -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"questionId":1,"userAnswer":"A"}'
+curl -s "localhost:8080/api/wrong/list?page=1&size=10" -H "Authorization: Bearer $TOKEN"
 
-密码安全升级：历史遗留密码使用无盐 SHA-256，W3 阶段完成了平滑迁移。登录时若匹配旧密文，自动重写为 BCrypt 密文，既兼容了老用户，又提升了安全性。
+# 4 统计与 Redis 现场
+curl -s localhost:8080/api/stat/today -H "Authorization: Bearer $TOKEN"
+docker exec study-redis redis-cli HGETALL stat:answer:1:20261120
 
-鉴权设计：JWT 本身无法主动失效。登录时签发 Token 并同时写入 Redis；拦截器校验 JWT 验签通过后，必须去 Redis 比对，登出时只需删 Redis 即可踢下线。
+# 5 生成报告（status=1，AI 真跑）
+RID=$(curl -s -X POST localhost:8080/api/report/generate -H "Authorization: Bearer $TOKEN" | py -3.9 -c "import sys,json;print(json.load(sys.stdin)['data']['requestId'])")
 
-事务边界与失效：答题判分与错题 upsert 包在 @Transactional(rollbackFor = Exception.class) 中。已亲手复现并记录三种事务失效场景（同类内部调用、非 public 方法、异常被吞）。
+# 6 SSE 五段回放
+py -3.9 scripts/check_sse.py "$TOKEN" "$RID"
 
-并发幂等 upsert：错题本收录依靠 uk_user_question 唯一索引 ON DUPLICATE KEY UPDATE，拒绝“先查后插”，防止并发漏洞。
+# 7 降级对照（错 key 或停 MQ → 200 + status=2，固定 requestId 见 docs/demo-w6.md）
+curl -s localhost:8080/api/report/<降级那份 requestId> -H "Authorization: Bearer $TOKEN"
 
-越权防护：所有错题本操作强制 SQL 带 user_id。删除他人的错题统一返回 404（不暴露资源存在性），而非 403。
+# 8 接口文档
+# 浏览器打开 http://localhost:8080/doc.html
+```
 
-Redis 缓存三件套：
+实测摘要（完整数据与原始输出见 `docs/benchmark.md` W6 段）：
 
-防穿透：详情查不到时写入 "__NULL__" 哨兵，TTL 5 分钟。
+| 项目 | 数字 | 测试条件 |
+|---|---|---|
+| 接口 P95 | question/list 64.2ms；wrong/hot 51.2ms；stat/today 69.4ms | c=100、30 秒、单实例、-Xmx512m、单机客户端 |
+| 吞吐 | c=50 时 3645 QPS，之后稳定在 2950–3400 | /api/stat/today，六档梯度 50→300 |
+| 缓存 | 冷组命中 99.80%（misses=2/1000）、热组 100% | c=1、n=1000，`CONFIG RESETSTAT` + misses 口径 |
+| 索引 | 6400 行：无索引全扫 1.28ms、两列 2.17ms、三列覆盖索引 0.10ms | 影子表 question_idx_test，COUNT 查询 |
+| 事务 | 正常提交三表 +1/+1/0；事务内异常三表一行不动 | `mvn -Dtest=TransactionRollbackIT test` |
+| MQ | 停 broker 仍 200 + status=2；重试 3 次后进 DLQ 并落模板报告 | 五场景见 benchmark |
 
-防击穿：SET NX EX 抢锁 + 双检 + 自旋降级，解锁用 Lua 脚本防误删。
-
-防雪崩：TTL 增加 ±20% 随机抖动。
-
-缓存一致性（Cache-Aside）：写库后挂 afterCommit 删缓存；Top100 榜单额外加 500ms 延迟双删。
-
-W4 异步与降级体系
-
-MQ 异步：RabbitMQ 三层拓扑（主队列 + TTL 重试队列 + DLQ 审计）。
-
-两层重试：调用级重试（AI 限流/超时，退避后直接降级并 ACK）与消息级重试（基建故障走 15s TTL 队列）。
-
-真实聚合：废除了 W4 遗留的假数据，报告由 4 条真实 SQL（整体表现、薄弱点、趋势、重练ID）驱动。
-
-并发防重：更新报告使用 update ... where status=0，防止重复消费改写。
-
-投递失败本地降级：引入 CorrelationData 与 Confirm 回调，若投递 MQ 失败，直接删除限流 Key，并在本地生成 status=2 的模板报告，接口返回 200，避免僵尸数据。
-
-traceId 跨线程：Web 线程的 traceId 透传进消息头，消费端放入 MDC。
-
-W5 统计与流式推送
-
-今日计数：采用 Redis HASH + Lua 脚本保证自增与过期时间原子性，TTL 严格定在次日 02:00，防止跨零点错乱。写入时机在答题事务的 afterCommit 中。
-
-连续打卡：跨月读取上个月 Key 进行拼接，并按日循环判断
-
-统计降级：Redis 宕机时，拦截器放宽 DataAccessException 并降级为纯 JWT 验签（保业务可用）；StatService 业务层降级直查 MySQL（保数据准确），返回 200。
-
-SSE 分段推送：由于 BeanOutputConverter 需完整 JSON 解析，采用“落库后拆分为 5 段（overall/weakPoints/causes/suggestions/practiceQuestionIds）推入 Redis List，由 SseEmitter 每 800ms 轮询推送”的方案。前端使用 fetch + ReadableStream 携带 Authorization 头消费，避免 Token 拼入 URL。
-
-⚠️ 已知未做项
-P1/P2 扩展：批量提交试卷、管理员题目导入后台接口。
-
-SSE 说明：未做 Token 级真流式（由于结构化 JSON 解析限制），目前为分段回放方案。
-
-统计预聚合：暂未建表，当前单用户数据量极小，直查 MySQL 即可。触发条件为单用户 > 10w 条或 P95 > 200ms，届时再上预聚合表。
-
-🎬 演示脚本 (W6 待录制)
-docker compose up -d 一键起依赖。
-
-curl 注册 + 登录。
-
-刷 3 道题（错 2 道），查库展示错题本自动出现，查 Redis 查看今日统计 Hash 与打卡 Bitmap。
-
-提交重练（答对一题），查库展示错题被移除。
-
-调 /api/stat/today 和 /api/stat/subject，展示统计与连续打卡。
-
-调 /api/report/history 展示历史分页；调 /api/report/stream/{requestId} 展示 SSE 分段推送（5段 + done）。
-
-停掉 RabbitMQ（或改错 AI Key），触发报告，展示投递失败降级与 AI 失败降级（接口 200，status=2）。
-
-停掉 Redis，调统计接口展示降级查 MySQL。
+> 数字口径：压测用自研 Python 脚本（标准库 http.client，复用连接），不是 JMeter；客户端与服务同机，QPS 只能代表单实例下限。这一句 benchmark 里也写着。
