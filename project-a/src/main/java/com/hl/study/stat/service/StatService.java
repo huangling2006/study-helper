@@ -29,29 +29,50 @@ public class StatService {
     @Resource
     private CheckinBitmap checkin;
 
+    /** 【W6/M9】Redis 故障后的本地短路窗口：窗口内直接走 MySQL，不再每条请求都等超时 */
+    private static final long REDIS_DOWN_WINDOW_MS = 30_000L;
+    private volatile long redisDownUntil = 0L;
+
+    private void markRedisDown() {
+        redisDownUntil = System.currentTimeMillis() + REDIS_DOWN_WINDOW_MS;
+    }
+
     public TodayStatVO today(Long userId) {
         LocalDate day = LocalDate.now();
+        boolean redisUp = System.currentTimeMillis() >= redisDownUntil;
         AnswerCount c = null;
 
-        try {
-            c = counter.read(userId, day);
-        } catch (DataAccessException e) {
-            // 只拦截基础设施异常（如 Redis 宕机、超时），不吞 NPE 等代码 Bug
-            log.warn("stat redis unavailable, fallback to db, userId={}, error={}", userId, e.getClass().getSimpleName());
+        if (redisUp) {
+            try {
+                c = counter.read(userId, day);
+            } catch (DataAccessException e) {
+                // 只拦截基础设施异常（如 Redis 宕机、超时），不吞 NPE 等代码 Bug
+                log.warn("stat redis unavailable, fallback to db, userId={}, error={}", userId, e.getClass().getSimpleName());
+                redisUp = false;
+                markRedisDown();
+            }
         }
 
         if (c == null) {
             c = statMapper.countBetween(userId, day.atStartOfDay(), day.plusDays(1).atStartOfDay());
             if (c == null) c = new AnswerCount(0L, 0L);
-            counter.backfillQuietly(userId, day, c);
+            if (redisUp) {
+                counter.backfillQuietly(userId, day, c);
+            }
         }
 
         int streak, lastStreak;
-        try {
-            streak = checkin.streak(userId, day);
-            lastStreak = checkin.streak(userId, day.minusDays(1));
-        } catch (DataAccessException e) {
-            log.warn("checkin bitmap unavailable, fallback to db, userId={}", userId);
+        if (redisUp) {
+            try {
+                streak = checkin.streak(userId, day);
+                lastStreak = checkin.streak(userId, day.minusDays(1));
+            } catch (DataAccessException e) {
+                log.warn("checkin bitmap unavailable, fallback to db, userId={}", userId);
+                markRedisDown();
+                streak = -1;
+                lastStreak = -1;
+            }
+        } else {
             streak = -1;
             lastStreak = -1;
         }

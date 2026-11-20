@@ -15,7 +15,7 @@ spring:
       host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:} # 本地无密码留空
-      timeout: 2s # 【W5 新增】Redis 命令执行超时时间，防止 Redis 宕机导致接口长时间阻塞
+      timeout: 500ms # 【W6/M9】从 2s 降到 500ms：Redis 挂了宁可快速失败一次再查库，不要 2s × 三次读
   threads:
     virtual:
       enabled: true # JDK21 虚拟线程

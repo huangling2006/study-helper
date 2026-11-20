@@ -77,7 +77,7 @@ public class ReportConsumer {
             // S4: 带条件的更新，防并发重复写，返回影响行数
             int updated = reportMapper.markSuccessOrDegraded(
                     row.getId(), result.status(), result.contentJson(),
-                    result.tokens(), result.model(), result.errorMsg());
+                    result.tokens(), result.model(), trimMsg(result.errorMsg()));
 
             if (updated > 0) {
                 log.info("report done, requestId={}, status={}, tokens={}, model={}",
@@ -108,7 +108,7 @@ public class ReportConsumer {
                     if (row != null && row.getStatus() == 0) {
                         ReportStats stats = aggregator.collect(row.getUserId());
                         String content = template.build(stats, "retry_exhausted");
-                        reportMapper.markSuccessOrDegraded(row.getId(), 2, content, 0, "template-v1", "retry_exhausted: " + e.getMessage());
+                        reportMapper.markSuccessOrDegraded(row.getId(), 2, content, 0, "template-v1", trimMsg("retry_exhausted: " + e.getMessage()));
                     }
                     publishToDlq(msg, "retry_exhausted", e.getMessage());
                 } catch (Exception ex) {
@@ -121,6 +121,17 @@ public class ReportConsumer {
             // S7: 线程池复用，必须清理 MDC
             MDC.remove(TraceIdFilter.TRACE_ID);
         }
+    }
+
+    /**
+     * 【W6 修复】error_msg 列是 varchar(255)，MyBatis 的异常信息（含 SQL 文本）很容易超长，
+     * 超长会让「重试耗尽后写模板」这一步本身失败，留下 status=0 的僵尸行。这里统一裁剪。
+     */
+    private static String trimMsg(String s) {
+        if (s == null) {
+            return null;
+        }
+        return s.length() <= 240 ? s : s.substring(0, 240);
     }
 
     private void republishToRetry(ReportMessage msg, int next) {
